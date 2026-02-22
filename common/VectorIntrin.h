@@ -41,6 +41,12 @@
 #include <arm_neon.h>
 #endif
 
+#ifndef _MM_MK_INSERTPS_NDX
+#define _MM_MK_INSERTPS_NDX(srcField, dstField, zeroMask) \
+	(((srcField) << 6) | ((dstField) << 4) | (zeroMask))
+#endif
+
+
 #ifdef __APPLE__
 #include <stdlib.h> // alloca
 #else

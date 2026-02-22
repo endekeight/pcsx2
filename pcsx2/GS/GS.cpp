@@ -994,6 +994,9 @@ void GSFreeWrappedMemory(void* ptr, size_t size, size_t repeat)
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 
 static int s_shm_fd = -1;
 
@@ -1001,15 +1004,22 @@ void* GSAllocateWrappedMemory(size_t size, size_t repeat)
 {
 	pxAssert(s_shm_fd == -1);
 
+#if defined(SYS_memfd_create)
+	s_shm_fd = static_cast<int>(syscall(SYS_memfd_create, "GS.mem", 0));
+#elif defined(MFD_CLOEXEC)
+	s_shm_fd = memfd_create("GS.mem", 0);
+#else
 	const char* file_name = "/GS.mem";
 	s_shm_fd = shm_open(file_name, O_RDWR | O_CREAT | O_EXCL, 0600);
 	if (s_shm_fd != -1)
 	{
 		shm_unlink(file_name); // file is deleted but descriptor is still open
 	}
-	else
+#endif
+
+	if (s_shm_fd < 0)
 	{
-		fprintf(stderr, "Failed to open %s due to %s\n", file_name, strerror(errno));
+		fprintf(stderr, "Failed to create shared memory due to %s\n", strerror(errno));
 		return nullptr;
 	}
 

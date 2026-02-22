@@ -3,7 +3,11 @@
 
 #include "CDVD/CDVDdiscReader.h"
 
+#if __has_include(<libudev.h>)
 #include <libudev.h>
+#define HAVE_LIBUDEV 1
+#endif
+
 #include <linux/cdrom.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -11,6 +15,7 @@
 
 std::vector<std::string> GetOpticalDriveList()
 {
+#ifdef HAVE_LIBUDEV
 	udev* udev_context = udev_new();
 	if (!udev_context)
 		return {};
@@ -39,6 +44,9 @@ std::vector<std::string> GetOpticalDriveList()
 	udev_unref(udev_context);
 
 	return drives;
+#else
+	return {};
+#endif
 }
 
 void GetValidDrive(std::string& drive)

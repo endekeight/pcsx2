@@ -291,7 +291,7 @@ void extrapolate_aa1_triangle_edge(inout ProcessedVertex v0, ProcessedVertex v1,
 	// Extrapolate and clamp color
 	#if VS_IIP
 		v0.c += dc * weights;
-		v0.c = clamp(v0.c, vec4(0), vec4(255));
+		v0.c = clamp(v0.c, vec4(0.0), vec4(255.0));
 	#endif
 
 	v0.p.z += dot(dz, weights); // Extrapolate depth

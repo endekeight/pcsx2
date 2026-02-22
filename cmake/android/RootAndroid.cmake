@@ -1,29 +1,3 @@
-# Setting it to a range tells it that it supports the features on the newer
-# versions as well, avoiding setting policies.
-cmake_minimum_required(VERSION 3.16...3.25)
-
-# Enabling this cmake policy gets rid of warnings regarding LTO.
-cmake_policy(SET CMP0069 NEW)
-set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
-
-if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
-	message(FATAL_ERROR "PCSX2 does not support in-tree builds.  Please make a build directory that is not the PCSX2 source directory and generate your CMake project there using either `cmake -B build_directory` or by running cmake from the build directory.")
-endif()
-
-# Project Name
-project(Pcsx2 C CXX)
-
-# Variable to check that people use the good file
-set(TOP_CMAKE_WAS_SOURCED TRUE)
-
-# set module path
-set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-
-if(ANDROID)
-	include(android/RootAndroid)
-	return()
-endif()
-
 # Write binaries to the bin directory under the build directory.
 # This makes it simple to run development builds directly out of the build directory.
 if (UNIX AND NOT APPLE)
@@ -40,8 +14,8 @@ detect_compiler()
 
 #-------------------------------------------------------------------------------
 # Include specific module
-include(BuildParameters)
-include(SearchForStuff)
+include(android/BuildParametersAndroid)
+include(android/SearchForStuffAndroid)
 
 # Must be done after SearchForStuff
 get_git_version_info()
@@ -53,26 +27,10 @@ add_subdirectory(common)
 # make pcsx2
 add_subdirectory(pcsx2)
 
-if(ENABLE_QT_UI)
-	add_subdirectory(pcsx2-qt)
-endif()
-
-# Updater is Windows only for now.
-if (WIN32)
-	add_subdirectory(updater)
-endif()
-
 # tests
 if(ENABLE_TESTS)
 	add_subdirectory(3rdparty/googletest)
 	add_subdirectory(tests/ctest)
-endif()
-
-# gsrunner
-if(ENABLE_GSRUNNER)
-	add_subdirectory(pcsx2-gsrunner)
-else()
-	add_subdirectory(pcsx2-gsrunner EXCLUDE_FROM_ALL)
 endif()
 
 #-------------------------------------------------------------------------------
@@ -89,10 +47,14 @@ endif()
 if(ARCH_ARM64)
 	message(WARNING "
 *************** UNSUPPORTED CONFIGURATION ***************
+
 Apple Silicon support in PCSX2 is INCOMPLETE. There are
 currently no EE/VU/IOP recompilers, and games will run
 VERY slow. There is no date for completion yet, you
 should set -DCMAKE_OSX_ARCHITECTURES=x86_64 for now,
 unless you want to work on the recompilers.
+
+We also ask that you read https://dont-ship.it/.
+
 *********************************************************")
 endif()

@@ -7,13 +7,10 @@ include(GNUInstallDirs)
 # Misc option
 #-------------------------------------------------------------------------------
 option(ENABLE_TESTS "Enables building the unit tests" ON)
-option(ENABLE_QT_UI "Enables building the PCSX2 Qt interface." ON)
-option(ENABLE_GSRUNNER "Enables building the GSRunner by default.  It can still be built with `make pcsx2-gsrunner` otherwise." OFF)
+option(ENABLE_GSRUNNER "Enables building the GSRunner" OFF)
 option(LTO_PCSX2_CORE "Enable LTO/IPO/LTCG on the subset of pcsx2 that benefits most from it but not anything else")
 option(USE_VTUNE "Plug VTUNE to profile GS JIT.")
 option(PACKAGE_MODE "Use this option to ease packaging of PCSX2 (developer/distribution option)")
-option(BUNDLE_EMOJI_FONT "Bundles Noto Color Emoji for systems whose system emoji font isn't usable by freetype" ON)
-option(POSITION_INDEPENDENT_CODE "Generate position-independent code. It is recommended that you leave this on." ON)
 
 #-------------------------------------------------------------------------------
 # Graphical option
@@ -26,7 +23,7 @@ option(USE_VULKAN "Enable Vulkan GS renderer" ON)
 #-------------------------------------------------------------------------------
 # Path and lib option
 #-------------------------------------------------------------------------------
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
 	option(ENABLE_SETCAP "Enable networking capability for DEV9" OFF)
 	option(X11_API "Enable X11 support" ON)
 	option(WAYLAND_API "Enable Wayland support" ON)
@@ -67,78 +64,22 @@ set(CMAKE_SHARED_LINKER_FLAGS_DEVEL "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO}
 	CACHE STRING "Flags used for linking shared libraries during development builds" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS_DEVEL "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO}"
 	CACHE STRING "Flags used for linking executables during development builds" FORCE)
-# Exclude Debug from the configurations we can import from
-set(CMAKE_MAP_IMPORTED_CONFIG_DEVEL "RelWithDebInfo" "Release" "MinSizeRel" "None" "NoConfig" ""
-	CACHE STRING "Configurations used when importing packages for development builds" FORCE)
 if(CMAKE_CONFIGURATION_TYPES)
 	list(INSERT CMAKE_CONFIGURATION_TYPES 0 Devel)
 endif()
-mark_as_advanced(CMAKE_C_FLAGS_DEVEL CMAKE_CXX_FLAGS_DEVEL CMAKE_LINKER_FLAGS_DEVEL CMAKE_SHARED_LINKER_FLAGS_DEVEL CMAKE_EXE_LINKER_FLAGS_DEVEL CMAKE_MAP_IMPORTED_CONFIG_DEVEL)
+mark_as_advanced(CMAKE_C_FLAGS_DEVEL CMAKE_CXX_FLAGS_DEVEL CMAKE_LINKER_FLAGS_DEVEL CMAKE_SHARED_LINKER_FLAGS_DEVEL CMAKE_EXE_LINKER_FLAGS_DEVEL)
 
 #-------------------------------------------------------------------------------
-# Select the architecture
-#-------------------------------------------------------------------------------
-if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "amd64" OR
-   "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "AMD64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
-	# Multi-ISA only exists on x86.
-	option(DISABLE_ADVANCE_SIMD "Disable advance use of SIMD (SSE2+ & AVX)" OFF)
+set(ARCH_ARM64 TRUE)
+add_compile_options("-march=armv8-a+crc")
 
-	list(APPEND PCSX2_DEFS _M_X86=1)
-	set(ARCH_X86 TRUE)
-	if(DISABLE_ADVANCE_SIMD)
-		message(STATUS "Building for x86-64 (Multi-ISA).")
-	else()
-		message(STATUS "Building for x86-64.")
-	endif()
-
-	if(MSVC)
-		# SSE4.1 is not set by MSVC, it uses _M_SSE instead.
-		list(APPEND PCSX2_DEFS __SSE4_1__=1)
-
-		if(USE_CLANG_CL)
-			# clang-cl => need to explicitly enable SSE4.1.
-			add_compile_options("-msse4.1")
-		endif()
-	else()
-		# Multi-ISA => SSE4, otherwise native.
-		if (DISABLE_ADVANCE_SIMD)
-			add_compile_options("-msse" "-msse2" "-msse4.1" "-mfxsr")
-		else()
-			# Can't use march=native on Apple Silicon.
-			if(NOT APPLE OR (APPLE AND "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" AND NOT IS_ROSETTA))
-				add_compile_options("-march=native")
-			endif()
-		endif()
-	endif()
-elseif("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "aarch64" OR
-       "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
-	message(STATUS "Building for Apple Silicon (ARM64).")
-	set(ARCH_ARM64 TRUE)
-	if(APPLE)
-		# Min spec is an M1
-		add_compile_options("-march=armv8.4-a" "-mcpu=apple-m1")
-	else()
-		# Require atomic rmw instructions
-		add_compile_options("-march=armv8.1-a")
-	endif()
-
-	# If we're running on Linux, we need to detect the page/cache line size.
-	# It could be a virtual machine with 4K pages, or 16K with Asahi.
-	if(LINUX)
-		detect_page_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${HOST_PAGE_SIZE})
-		detect_cache_line_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
-	endif()
-	
-	# Windows page/cache line size seems to match x68-64 
-	if(WIN32)
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=0x1000)
-		# Value of std::hardware_destructive_interference_size for ARM64 on MSVC toolset 14.40.33807
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=64)
-	endif()
-else()
-	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_HOST_SYSTEM_PROCESSOR}")
+# If we're running on Linux, we need to detect the page/cache line size.
+# It could be a virtual machine with 4K pages, or 16K with Asahi.
+if(LINUX)
+	detect_page_size()
+	list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${HOST_PAGE_SIZE})
+	detect_cache_line_size()
+	list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
 endif()
 
 # Require C++20.
@@ -157,11 +98,15 @@ if(MSVC AND NOT USE_CLANG_CL)
 endif()
 
 if(MSVC)
+	# Disable RTTI
+	string(REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+
 	# Disable Exceptions
 	string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 else()
 	add_compile_options(-pipe -fvisibility=hidden -pthread)
 	add_compile_options(
+		"$<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>"
 		"$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>"
 	)
 endif()
@@ -247,9 +192,6 @@ if (MSVC)
 else()
 	set(DEFAULT_WARNINGS -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-missing-field-initializers)
 endif()
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-	list(APPEND DEFAULT_WARNINGS -Wno-attributes)
-endif()
 
 if (USE_PGO_GENERATE OR USE_PGO_OPTIMIZE)
 	add_compile_options("-fprofile-dir=${CMAKE_SOURCE_DIR}/profile")
@@ -278,34 +220,6 @@ if(USE_CLANG AND TIMETRACE)
 endif()
 
 set(PCSX2_WARNINGS ${DEFAULT_WARNINGS})
-
-if(POSITION_INDEPENDENT_CODE)
-	# Make sure position-independent code is enabled properly.
-	# Without this check, on some platforms (e.g. Fedora 43) the right flags
-	# won't be passed to the linker, resulting in a broken build when link time
-	# optimization is enabled (even with a cmake version >= 3.14).
-	if(NOT MSVC)
-		include(CheckPIESupported)
-		check_pie_supported(OUTPUT_VARIABLE PIE_SUPPORTED_OUTPUT LANGUAGES C CXX)
-
-		if((NOT CMAKE_C_LINK_PIE_SUPPORTED) OR (NOT CMAKE_CXX_LINK_PIE_SUPPORTED))
-			message(WARNING
-				"The POSITION_INDEPENDENT_CODE option is enabled but is not "
-				"supported at link time:\n${PIE_SUPPORTED_OUTPUT}")
-		endif()
-	endif()
-
-	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-else()
-	if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
-		message(WARNING
-			"The CMAKE_INTERPROCEDURAL_OPTIMIZATION option is enabled but the "
-			"POSITION_INDEPENDENT_CODE option is disabled. This has been found "
-			"to result in broken builds on certain platforms.")
-	endif()
-
-	set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
-endif()
 
 #-------------------------------------------------------------------------------
 # MacOS-specific things

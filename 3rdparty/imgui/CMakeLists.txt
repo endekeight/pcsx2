@@ -17,6 +17,9 @@ add_library(imgui
 )
 
 target_include_directories(imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+if(Freetype_INCLUDE_DIR)
+	target_include_directories(imgui PUBLIC "${Freetype_INCLUDE_DIR}")
+endif()
 target_include_directories(imgui PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(imgui PUBLIC Freetype::Freetype)
 target_link_libraries(imgui PUBLIC plutosvg::plutosvg)

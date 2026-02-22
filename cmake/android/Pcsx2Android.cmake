@@ -1,11 +1,3 @@
-# All flags, libraries, etc, that are shared between PCSX2 compilation files
-add_library(PCSX2_FLAGS INTERFACE)
-
-if(ANDROID)
-	include(android/Pcsx2Android)
-	return()
-endif()
-
 if(DISABLE_ADVANCE_SIMD OR LTO_PCSX2_CORE)
 	# Fixes issues with some compiler + linker combinations
 	add_library(PCSX2 OBJECT)
@@ -45,16 +37,6 @@ if(USE_LINKED_FFMPEG)
 	target_compile_definitions(PCSX2_FLAGS INTERFACE USE_LINKED_FFMPEG)
 	target_link_libraries(PCSX2_FLAGS INTERFACE FFMPEG::avcodec FFMPEG::avformat FFMPEG::avutil FFMPEG::swscale FFMPEG::swresample)
 endif()
-
-if(WIN32)
-	set(MIN_WIN32 0x0A00)
-	target_compile_definitions(PCSX2_FLAGS INTERFACE
-		WINVER=${MIN_WIN32}
-		_WIN32_WINNT=${MIN_WIN32}
-		WIN32_LEAN_AND_MEAN
-		WIL_SUPPRESS_EXCEPTIONS
-	)
-endif(WIN32)
 
 # Main pcsx2 source
 set(pcsx2Sources
@@ -252,6 +234,7 @@ set(pcsx2SPU2Sources
 	SPU2/ADSR.cpp
 	SPU2/Debug.cpp
 	SPU2/Dma.cpp
+	SPU2/Mixer.cpp
 	SPU2/spu2.cpp
 	SPU2/ReadInput.cpp
 	SPU2/RegTable.cpp
@@ -262,7 +245,6 @@ set(pcsx2SPU2Sources
 )
 
 set(pcsx2SPU2SourcesUnshared
-	SPU2/Mixer.cpp
 	SPU2/ReverbResample.cpp
 )
 
@@ -314,9 +296,9 @@ set(pcsx2DEV9Sources
 	DEV9/Sessions/TCP_Session/TCP_Session.cpp
 	DEV9/Sessions/TCP_Session/TCP_Session_In.cpp
 	DEV9/Sessions/TCP_Session/TCP_Session_Out.cpp
-	DEV9/Sessions/UDP_Session/UDP_Common.cpp
 	DEV9/Sessions/UDP_Session/UDP_FixedPort.cpp
 	DEV9/Sessions/UDP_Session/UDP_Session.cpp
+	DEV9/Sessions/UDP_Session/UDP_Common.cpp
 	DEV9/smap.cpp
 	DEV9/sockets.cpp
 	DEV9/DEV9.cpp
@@ -360,85 +342,19 @@ set(pcsx2DEV9Headers
 	DEV9/Sessions/BaseSession.h
 	DEV9/Sessions/ICMP_Session/ICMP_Session.h
 	DEV9/Sessions/TCP_Session/TCP_Session.h
-	DEV9/Sessions/UDP_Session/UDP_Common.h
 	DEV9/Sessions/UDP_Session/UDP_FixedPort.h
 	DEV9/Sessions/UDP_Session/UDP_BaseSession.h
 	DEV9/Sessions/UDP_Session/UDP_Session.h
+	DEV9/Sessions/UDP_Session/UDP_Common.h
 	DEV9/SimpleQueue.h
 	DEV9/smap.h
 	DEV9/sockets.h
 	DEV9/ThreadSafeMap.h
 	)
 
-# USB sources
-set(pcsx2USBSources
-	USB/USB.cpp
-	USB/deviceproxy.cpp
-	USB/qemu-usb/bus.cpp
-	USB/qemu-usb/core.cpp
-	USB/qemu-usb/desc.cpp
-	USB/qemu-usb/hid.cpp
-	USB/qemu-usb/input-keymap-qcode-to-qnum.cpp
-	USB/qemu-usb/usb-ohci.cpp
-	USB/shared/ringbuffer.cpp
-	USB/usb-eyetoy/cam-jpeg.cpp
-	USB/usb-eyetoy/jo_mpeg.cpp
-	USB/usb-eyetoy/usb-eyetoy-webcam.cpp
-	USB/usb-hid/usb-hid.cpp
-	USB/usb-lightgun/guncon2.cpp
-	USB/usb-mic/audiodev-cubeb.cpp
-	USB/usb-mic/usb-headset.cpp
-	USB/usb-mic/usb-mic.cpp
-	USB/usb-msd/usb-msd.cpp
-	USB/usb-pad/lg/lg_ff.cpp
-	USB/usb-pad/usb-buzz.cpp
-	USB/usb-pad/usb-gametrak.cpp
-	USB/usb-pad/usb-realplay.cpp
-	USB/usb-pad/usb-pad-ff.cpp
-	USB/usb-pad/usb-pad-sdl-ff.cpp
-	USB/usb-pad/usb-pad.cpp
-	USB/usb-pad/usb-seamic.cpp
-	USB/usb-pad/usb-train.cpp
-	USB/usb-pad/usb-trance-vibrator.cpp
-	USB/usb-pad/usb-turntable.cpp
-	USB/usb-printer/usb-printer.cpp
-)
+set(pcsx2USBSources USB/USBNull.cpp)
+set(pcsx2USBHeaders USB/USB.h)
 
-# USB headers
-set(pcsx2USBHeaders
-	USB/USB.h
-	USB/deviceproxy.h
-	USB/qemu-usb/USBinternal.h
-	USB/qemu-usb/desc.h
-	USB/qemu-usb/hid.h
-	USB/qemu-usb/input-keymap.h
-	USB/qemu-usb/queue.h
-	USB/qemu-usb/qusb.h
-	USB/shared/ringbuffer.h
-	USB/usb-eyetoy/cam-jpeg.h
-	USB/usb-eyetoy/jo_mpeg.h
-	USB/usb-eyetoy/ov519.h
-	USB/usb-eyetoy/usb-eyetoy-webcam.h
-	USB/usb-eyetoy/videodev.h
-	USB/usb-hid/usb-hid.h
-	USB/usb-lightgun/guncon2.h
-	USB/usb-mic/audio.h
-	USB/usb-mic/audiodev-cubeb.h
-	USB/usb-mic/audiodev-noop.h
-	USB/usb-mic/audiodev.h
-	USB/usb-mic/usb-headset.h
-	USB/usb-mic/usb-mic.h
-	USB/usb-msd/usb-msd.h
-	USB/usb-pad/lg/lg_ff.h
-	USB/usb-pad/usb-buzz.h
-	USB/usb-pad/usb-gametrak.h
-	USB/usb-pad/usb-realplay.h
-	USB/usb-pad/usb-pad-sdl-ff.h
-	USB/usb-pad/usb-pad.h
-	USB/usb-pad/usb-train.h
-	USB/usb-pad/usb-trance-vibrator.h
-	USB/usb-printer/usb-printer.h
-)
 
 # Host PAD
 set(pcsx2PADSources
@@ -475,7 +391,7 @@ set(pcsx2GSSourcesUnshared
 	GS/Renderers/SW/GSRendererSW.cpp
 )
 
-if(ARCH_X86)
+if(_M_X86)
 	list(APPEND pcsx2GSSourcesUnshared
 		GS/Renderers/SW/GSDrawScanlineCodeGenerator.all.cpp
 		GS/Renderers/SW/GSSetupPrimCodeGenerator.all.cpp
@@ -549,7 +465,6 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSFastList.h
 	GS/Renderers/Common/GSFunctionMap.h
 	GS/Renderers/Common/GSRenderer.h
-	GS/Renderers/Common/GSShaderEnums.h
 	GS/Renderers/Common/GSTexture.h
 	GS/Renderers/Common/GSVertex.h
 	GS/Renderers/Common/GSVertexTrace.h
@@ -568,9 +483,16 @@ set(pcsx2GSHeaders
 	GS/Renderers/SW/GSSetupPrimCodeGenerator.all.h
 	GS/Renderers/SW/GSTextureCacheSW.h
 	GS/Renderers/SW/GSVertexSW.h
-	)
+)
 
-if(ARCH_X86)
+## ANDROID
+list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
+list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
+list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGLAndroid.h)
+target_link_libraries(PCSX2_FLAGS INTERFACE PkgConfig::EGL)
+## ANDROID
+
+if(_M_X86)
 	list(APPEND pcsx2GSHeaders
 		GS/GSVector4.h
 		GS/GSVector4i.h
@@ -605,15 +527,10 @@ if(USE_OPENGL)
 	)
 	target_link_libraries(PCSX2_FLAGS INTERFACE glad)
 
-	if(WIN32)
-		list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextWGL.cpp)
-		list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextWGL.h)
-		target_link_libraries(PCSX2_FLAGS INTERFACE opengl32.lib WinPixEventRuntime::WinPixEventRuntime)
-	else()
-		if(X11_API OR WAYLAND_API)
-			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
-			list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
-		endif()
+	if(X11_API OR WAYLAND_API)
+		list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
+		list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
+	endif()
 
 		if(X11_API)
 			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGLX11.cpp)
@@ -628,7 +545,7 @@ if(USE_OPENGL)
 			# So, only add the headers, don't link.
 			target_include_directories(PCSX2_FLAGS INTERFACE ${Wayland_INCLUDE_DIRS})
 		endif()
-	endif()
+	# endif()
 endif()
 
 if(USE_VULKAN)
@@ -668,60 +585,12 @@ set(pcsx2GSMetalShaders
 	GS/Renderers/Metal/fxaa.metal
 )
 
-if(WIN32)
-	list(APPEND pcsx2DEV9Sources
-		DEV9/Win32/pcap_io_win32.cpp
-		DEV9/Win32/tap-win32.cpp
-	)
-	list(APPEND pcsx2DEV9Headers
-		DEV9/Win32/pcap_io_win32_funcs.h
-		DEV9/Win32/tap.h
-	)
-
-	list(APPEND pcsx2USBSources
-		USB/usb-eyetoy/cam-windows.cpp
-	)
-	list(APPEND pcsx2USBHeaders
-		USB/usb-eyetoy/cam-windows.h
-	)
-
-	list(APPEND pcsx2GSSources
-		GS/Renderers/DX11/D3D.cpp
-		GS/Renderers/DX11/D3D11ShaderCache.cpp
-		GS/Renderers/DX11/GSDevice11.cpp
-		GS/Renderers/DX11/GSTexture11.cpp
-		GS/Renderers/DX12/D3D12Builders.cpp
-		GS/Renderers/DX12/D3D12DescriptorHeapManager.cpp
-		GS/Renderers/DX12/D3D12ShaderCache.cpp
-		GS/Renderers/DX12/D3D12StreamBuffer.cpp
-		GS/Renderers/DX12/GSDevice12.cpp
-		GS/Renderers/DX12/GSTexture12.cpp
-	)
-	list(APPEND pcsx2GSHeaders
-		GS/Renderers/DX11/D3D.h
-		GS/Renderers/DX11/D3D11ShaderCache.h
-		GS/Renderers/DX11/GSDevice11.h
-		GS/Renderers/DX11/GSTexture11.h
-		GS/Renderers/DX12/D3D12Builders.h
-		GS/Renderers/DX12/D3D12DescriptorHeapManager.h
-		GS/Renderers/DX12/D3D12ShaderCache.h
-		GS/Renderers/DX12/D3D12StreamBuffer.h
-		GS/Renderers/DX12/GSDevice12.h
-		GS/Renderers/DX12/GSTexture12.h
-	)
-elseif(LINUX)
+if(LINUX)
 	list(APPEND pcsx2USBSources
 		USB/usb-eyetoy/cam-linux.cpp
 	)
 	list(APPEND pcsx2USBHeaders
 		USB/usb-eyetoy/cam-linux.h
-	)
-elseif(APPLE)
-	list(APPEND pcsx2USBSources
-		USB/usb-eyetoy/cam-macos.mm
-	)
-	list(APPEND pcsx2USBHeaders
-		USB/usb-eyetoy/cam-macos.h
 	)
 else()
 	list(APPEND pcsx2USBSources
@@ -752,15 +621,10 @@ set(pcsx2IPUHeaders
 	IPU/yuv2rgb.h
 )
 
-if(DISABLE_ADVANCE_SIMD AND ARCH_X86)
+if(DISABLE_ADVANCE_SIMD)
 	target_compile_definitions(PCSX2 PUBLIC MULTI_ISA_SHARED_COMPILATION)
 	if(USE_GCC)
 		target_link_options(PCSX2_FLAGS INTERFACE -Wno-odr)
-	endif()
-	if(WIN32)
-		set(compile_options_avx2 /arch:AVX2)
-		set(compile_options_avx  /arch:AVX)
-	elseif(USE_GCC)
 		# GCC can't inline into multi-isa functions if we use march and mtune, but can if we use feature flags
 		set(compile_options_avx2 -msse4.1 -mavx -mavx2 -mbmi -mbmi2 -mfma)
 		set(compile_options_avx  -msse4.1 -mavx)
@@ -885,37 +749,12 @@ if(APPLE)
 	)
 endif()
 
-if(WIN32)
-	# RAIntegration is only supported on Windows.
-	target_compile_definitions(PCSX2_FLAGS INTERFACE ENABLE_RAINTEGRATION)
-	target_link_libraries(PCSX2_FLAGS INTERFACE rainterface)
-endif()
-if(WIN32)
-	list(APPEND pcsx2InputSources
-		Input/DInputSource.cpp
-		Input/XInputSource.cpp
-	)
-	list(APPEND pcsx2InputHeaders
-		Input/DInputSource.h
-		Input/XInputSource.h
-	)
-endif()
-
 # Linux sources
 set(pcsx2LinuxSources
 	CDVD/Linux/DriveUtility.cpp
 	CDVD/Linux/IOCtlSrc.cpp
-	)
+)
 
-set(pcsx2OSXSources
-	CDVD/Darwin/DriveUtility.cpp
-	CDVD/Darwin/IOCtlSrc.cpp
-	)
-
-set(pcsx2FreeBSDSources
-	CDVD/Darwin/DriveUtility.cpp
-	CDVD/Darwin/IOCtlSrc.cpp
-	)
 
 # Linux headers
 set(pcsx2LinuxHeaders
@@ -1008,7 +847,6 @@ set(pcsx2x86Sources
 	x86/ix86-32/iR5900Shift.cpp
 	x86/ix86-32/iR5900Templates.cpp
 	x86/ix86-32/recVTLB.cpp
-	x86/Vif_Dynarec.cpp
 	x86/Vif_UnpackSSE.cpp
 	)
 
@@ -1065,6 +903,7 @@ set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
 )
 
+
 # These ones benefit a lot from LTO
 set(pcsx2LTOSources
 	${pcsx2Sources}
@@ -1120,41 +959,17 @@ target_sources(PCSX2 PRIVATE
 )
 
 # platform sources
-if(LINUX)
-	target_sources(PCSX2 PRIVATE
-		${pcsx2LinuxSources}
-		${pcsx2LinuxHeaders}
-		)
-
-	target_link_libraries(PCSX2_FLAGS INTERFACE
-		PkgConfig::LIBUDEV
+target_sources(PCSX2 PRIVATE
+	${pcsx2LinuxSources}
 	)
-endif()
-
-if(WIN32)
-	target_sources(PCSX2 PRIVATE
-		${pcsx2WindowsSources}
-	)
-endif()
 
 target_sources(PCSX2 PRIVATE ${pcsx2USBSources} ${pcsx2USBHeaders})
-
-if(APPLE OR BSD)
-	if(APPLE)
-		target_sources(PCSX2 PRIVATE
-			${pcsx2OSXSources})
-	else()
-		target_sources(PCSX2 PRIVATE
-			${pcsx2FreeBSDSources})
-	endif()
-	target_sources(PCSX2 PRIVATE
-		${pcsx2LinuxHeaders})
-endif()
 
 target_link_libraries(PCSX2_FLAGS INTERFACE
 	common
 	imgui
 	fmt::fmt
+	ryml::ryml
 	libchdr
 	libzip::zip
 	cpuinfo
@@ -1163,8 +978,7 @@ target_link_libraries(PCSX2_FLAGS INTERFACE
 	discord-rpc
 	simpleini
 	freesurround
-	Freetype::Freetype
-	SDL3::SDL3
+	SDL2::SDL2
 	ZLIB::ZLIB
 	LZ4::LZ4
 	SoundTouch::SoundTouch
@@ -1173,39 +987,12 @@ target_link_libraries(PCSX2_FLAGS INTERFACE
 	Zstd::Zstd
 	demanglegnu
 	ccc
-	plutovg::plutovg
-	plutosvg::plutosvg
 	${LIBC_LIBRARIES}
 )
 
-if(WIN32)
-	target_link_libraries(PCSX2_FLAGS INTERFACE
-		WIL::WIL
-		D3D12MemAlloc
-		setupapi.lib
-		ws2_32.lib
-		shlwapi.lib
-		iphlpapi.lib
-		dsound.lib
-		dxguid.lib
-		dinput8.lib
-		hid.lib
-		PowrProf.lib
-		d3dcompiler.lib
-		d3d11.lib
-		d3d12.lib
-		dxgi.lib
-		strmiids.lib
-		opengl32.lib
-		comsuppw.lib
-		dwmapi.lib
-		OneCore.lib
-	)
-else()
 	target_link_libraries(PCSX2_FLAGS INTERFACE
 		PCAP::PCAP
 	)
-endif()
 
 # additonal include directories
 if(ARCH_X86)
@@ -1253,20 +1040,9 @@ fixup_file_properties(PCSX2)
 force_include_last(PCSX2_FLAGS "/(usr|local)/include/?$")
 
 if (APPLE)
-	find_library(APPKIT_LIBRARY AppKit)
-	find_library(IOKIT_LIBRARY IOKit)
 	find_library(METAL_LIBRARY Metal)
 	find_library(QUARTZCORE_LIBRARY QuartzCore)
-	find_library(AVFOUNDATION_LIBRARY AVFoundation)
-	find_library(COREMEDIA_LIBRARY CoreMedia)
-	target_link_libraries(PCSX2_FLAGS INTERFACE
-		${APPKIT_LIBRARY}
-		${IOKIT_LIBRARY}
-		${METAL_LIBRARY}
-		${QUARTZCORE_LIBRARY}
-		${AVFOUNDATION_LIBRARY}
-		${COREMEDIA_LIBRARY}
-	)
+	target_link_libraries(PCSX2_FLAGS INTERFACE ${METAL_LIBRARY} ${QUARTZCORE_LIBRARY})
 endif()
 
 set_property(GLOBAL PROPERTY PCSX2_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1280,9 +1056,6 @@ function(setup_main_executable target)
 			continue()
 		endif()
 		if (NOT WIN32 AND "${path}" MATCHES "/dx11/") # Don't include unneccessary stuff
-			continue()
-		endif()
-		if (NOT BUNDLE_EMOJI_FONT AND "${path}" MATCHES "fonts/Twemoji")
 			continue()
 		endif()
 		pcsx2_resource(${target} ${path} ${CMAKE_SOURCE_DIR}/bin/resources/)
@@ -1302,58 +1075,6 @@ function(setup_main_executable target)
 
 	get_property(PCSX2_SOURCE_DIR GLOBAL PROPERTY PCSX2_SOURCE_DIR)
 	get_property(PCSX2_METAL_SHADERS GLOBAL PROPERTY PCSX2_METAL_SHADERS)
-
-	if(WIN32)
-		target_sources(${target} PRIVATE
-			${PCSX2_SOURCE_DIR}/windows/PCSX2.manifest
-			${PCSX2_SOURCE_DIR}/windows/PCSX2.rc
-		)
-		set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
-		install(TARGETS ${target} DESTINATION ${CMAKE_SOURCE_DIR}/bin)
-		if(MSVC)
-			install(FILES $<TARGET_PDB_FILE:${target}> DESTINATION ${CMAKE_SOURCE_DIR}/bin)
-		endif()
-
-		# Copy dependency libraries.
-		set(DEPS_BINDIR "${CMAKE_SOURCE_DIR}/deps/bin")
-		set(DEPS_TO_COPY freetype.dll harfbuzz.dll jpeg62.dll libpng16.dll libsharpyuv.dll libwebp.dll libwebpdemux.dll libwebpmux.dll lz4.dll SDL3.dll shaderc_shared.dll z.dll zstd.dll plutovg.dll plutosvg.dll ryml.dll)
-		set(DEPS_TO_COPY
-			$<IF:$<CONFIG:Debug>,kddockwidgets-qt6d.dll,kddockwidgets-qt6.dll>
-			${DEPS_TO_COPY}
-		)
-		foreach(DEP_TO_COPY ${DEPS_TO_COPY})
-			install(FILES "${DEPS_BINDIR}/${DEP_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin")
-		endforeach()
-
-		file(GLOB OPT_DEPS_FULL_PATHS
-			"${DEPS_BINDIR}/avcodec-*.dll"
-			"${DEPS_BINDIR}/avformat-*.dll"
-			"${DEPS_BINDIR}/avutil-*.dll"
-			"${DEPS_BINDIR}/swscale-*.dll"
-			"${DEPS_BINDIR}/swresample-*.dll"
-		)
-		install(FILES ${OPT_DEPS_FULL_PATHS} DESTINATION "${CMAKE_SOURCE_DIR}/bin" OPTIONAL)
-
-		set(OPT_DEPS_TO_COPY ${OPT_DEPS_FULL_PATHS})
-		list(TRANSFORM OPT_DEPS_TO_COPY REPLACE "^.*/" "")
-
-		set(SYMBOLS_TO_COPY ${DEPS_TO_COPY} ${OPT_DEPS_TO_COPY})
-		list(TRANSFORM SYMBOLS_TO_COPY REPLACE "[.]dll" ".pdb")
-		foreach(SYMBOL_TO_COPY ${SYMBOLS_TO_COPY})
-			install(FILES "${DEPS_BINDIR}/${SYMBOL_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin" OPTIONAL)
-		endforeach()
-
-		set(AGILITY_DIR "${CMAKE_SOURCE_DIR}/deps/bin/D3D12")
-		set(AGILITY_DEPS_TO_COPY D3D12Core.dll d3d12SDKLayers.dll)
-		foreach(AGILITY_DEP_TO_COPY ${AGILITY_DEPS_TO_COPY})
-			install(FILES "${DEPS_BINDIR}/D3D12/${AGILITY_DEP_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin/D3D12" OPTIONAL)
-		endforeach()
-
-		get_target_property(WINDEPLOYQT_EXE Qt6::windeployqt IMPORTED_LOCATION)
-		install(CODE "execute_process(COMMAND \"${WINDEPLOYQT_EXE}\" \"${CMAKE_SOURCE_DIR}/bin/$<TARGET_FILE_NAME:${target}>\" --plugindir \"${CMAKE_SOURCE_DIR}/bin/QtPlugins\" --pdb --no-compiler-runtime --no-system-d3d-compiler --no-system-dxc-compiler --no-translations --no-network COMMAND_ERROR_IS_FATAL ANY)")
-		install(CODE "file(WRITE \"${CMAKE_SOURCE_DIR}/bin/qt.conf\" \"[Paths]\\nPlugins = ./QtPlugins\")")
-	endif()
-
 
 	if (UNIX AND NOT APPLE)
 		if (PACKAGE_MODE)
@@ -1409,7 +1130,6 @@ function(setup_main_executable target)
 		set_target_properties(${target} PROPERTIES
 			MACOSX_BUNDLE true
 			MACOSX_BUNDLE_INFO_PLIST "${PCSX2_SOURCE_DIR}/Resources/Info.plist.in"
-			XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${PCSX2_SOURCE_DIR}/Resources/PCSX2.entitlements"
 			OUTPUT_NAME PCSX2
 			# Fixes complaints when Xcode tries to sign for running locally about MoltenVK not being signed
 			XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS --deep
@@ -1450,8 +1170,7 @@ function(setup_main_executable target)
 	endif()
 
 	if(ENABLE_SETCAP AND UNIX AND NOT APPLE)
-		message(WARNING "Networking capabilities enabled on the main executable, building will require temporary root elevation.")
-		message(WARNING "File capabilities can disable LD_PRELOAD-based integrations such as the Steam overlay and Steam Input.")
+		message(WARNING "Networking capabilities enabled, building will require temporary root elevation.")
 		add_custom_target(
 			pcsx2-enable-setcap
 			ALL
@@ -1479,3 +1198,80 @@ source_group(Resources/GUI FILES ${pcsx2GuiResources})
 source_group(Resources/PAD FILES ${pcsx2PADResources})
 source_group(Resources/Recording FILES ${pcsx2RecordingVirtualPadResources})
 source_group(Resources REGULAR_EXPRESSION ${CMAKE_CURRENT_BINARY_DIR}/*)
+
+# ---- Install headers ----
+
+INSTALL (
+    DIRECTORY ${CMAKE_SOURCE_DIR}/pcsx2/
+    DESTINATION ${CMAKE_BINARY_DIR}/include/pcsx2
+    FILES_MATCHING PATTERN "*.h*" PATTERN "*.inl*"
+	PATTERN "x86" EXCLUDE
+	)
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/deps/android/include
+	DESTINATION ${CMAKE_BINARY_DIR}
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/fmt/include/
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/glad/include/
+	DESTINATION ${CMAKE_BINARY_DIR}/include/glad
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/fast_float/include/
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/include/
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/imgui/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/ccc/src/
+	DESTINATION ${CMAKE_BINARY_DIR}/include/
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/simpleini/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/cpuinfo/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/discord-rpc/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/vulkan/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+	DIRECTORY ${CMAKE_SOURCE_DIR}/3rdparty/vixl/include
+	DESTINATION ${CMAKE_BINARY_DIR}/include
+	FILES_MATCHING PATTERN "*.h*")
+
+INSTALL (
+    DIRECTORY ${CMAKE_BINARY_DIR}/include
+    DESTINATION ${CMAKE_INSTALL_PREFIX}
+    FILES_MATCHING PATTERN "*.h*" PATTERN "*.inl*")
+
+# ---- Install static libraries ----
+

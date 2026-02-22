@@ -69,6 +69,7 @@ SHADERC_SPIRVTOOLS=6337eb62cadd7d124ac6789bf39c0f71148f0a73
 mkdir -p deps-build
 cd deps-build
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 export PKG_CONFIG_PATH="$INSTALLDIR/lib/pkgconfig:$PKG_CONFIG_PATH"
 export LDFLAGS="-L$INSTALLDIR/lib $LDFLAGS"
 export CFLAGS="-I$INSTALLDIR/include $CFLAGS"
@@ -301,8 +302,6 @@ cd "qtbase-everywhere-src-$QT"
 
 # Patch Qt to support macOS 11
 patch -p1 < "$SCRIPTDIR/qt-macos11compat.patch"
-# Backport fix build on Xcode 26.4 (https://codereview.qt-project.org/c/qt/qtbase/+/724619)
-patch -p1 < "$SCRIPTDIR/qt110-xcode264.patch"
 
 # since we don't have a direct reference to QtSvg, it doesn't deployed directly from the main binary
 # (only indirectly from iconengines), and the libqsvg.dylib imageformat plugin does not get deployed.

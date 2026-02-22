@@ -7,6 +7,12 @@ endif(NOT TOP_CMAKE_WAS_SOURCED)
 
 add_library(common)
 
+if(ANDROID)
+	include(android/CommonAndroid)
+	return()
+endif()
+
+# x86emitter sources
 target_sources(common PRIVATE
 	AlignedMalloc.cpp
 	Assertions.cpp

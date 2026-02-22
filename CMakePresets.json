@@ -55,6 +55,28 @@
                 "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "clang-base x86_64",
+            "displayName": "Base x86_64",
+            "description": "Base x86_64 preset for Clang. Only for inheriting from.",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/x86_64/pc",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_OSX_ARCHITECTURES": "x86_64",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "clang-debug x86_64",
+            "displayName": "Clang Debug x86_64",
+            "description": "Debug build using ninja and clang.",
+            "inherits": "clang-base x86_64",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
         }
     ]
 }

@@ -228,6 +228,9 @@ namespace PageFaultHandler
 
 [[maybe_unused]] static bool IsStoreInstruction(const void* ptr)
 {
+	if (!ptr)
+		return false;
+
 	u32 bits;
 	std::memcpy(&bits, ptr, sizeof(bits));
 
