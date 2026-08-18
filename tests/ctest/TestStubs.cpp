@@ -92,6 +92,19 @@ R5900cpu *Cpu = nullptr;
 template<> void vtlb_memWrite<u32>(u32 mem, u32 value) {}
 void* vtlb_GetPhyPtr(u32 pAddr) { return nullptr; }
 
+namespace vtlb_private {
+alignas(64) MapData vtlbdata;
+}
+
+mem8_t vtlb_MissRead8(u32 addr) { return 0; }
+mem16_t vtlb_MissRead16(u32 addr) { return 0; }
+mem32_t vtlb_MissRead32(u32 addr) { return 0; }
+mem64_t vtlb_MissRead64(u32 addr) { return 0; }
+void vtlb_MissWrite8(u32 addr, mem8_t data) {}
+void vtlb_MissWrite16(u32 addr, mem16_t data) {}
+void vtlb_MissWrite32(u32 addr, mem32_t data) {}
+void vtlb_MissWrite64(u32 addr, mem64_t data) {}
+
 // Zip stubs
 extern "C" {
 struct zip {};

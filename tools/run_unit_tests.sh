@@ -216,6 +216,7 @@ if [[ "$TARGET_ARCH" == "arm64" ]]; then
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/arm64/Arm64Emitter.cpp" \
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/arm64/Arm64RegAlloc.cpp" \
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/arm64/Arm64Dispatcher.cpp" \
+    "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/arm64/Arm64VtlbBackpatch.cpp" \
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/ee/EEBlockManager.cpp" \
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/ee/EEConstProp.cpp" \
     "$DIR/../AndroidSX2/app/src/main/cpp/dynarec/iop/IOPBlockManager.cpp" \
@@ -223,6 +224,7 @@ if [[ "$TARGET_ARCH" == "arm64" ]]; then
     "$DIR/../tests/dynarec/regalloc_tests.cpp" \
     "$DIR/../tests/dynarec/ee_block_tests.cpp" \
     "$DIR/../tests/dynarec/iop_block_tests.cpp" \
+    "$DIR/../tests/dynarec/alu_tests.cpp" \
     -framework Foundation -framework Cocoa -framework IOKit \
     -o "$BUILD_DIR/dynarec_test"
 
