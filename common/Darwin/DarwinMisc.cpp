@@ -640,3 +640,10 @@ bool PageFaultHandler::Install(Error* error)
 
 bool PageFaultHandler::InstallSecondaryThread() { return true; }
 #endif
+
+void HostSys::FlushInstructionCache(void* address, u32 size)
+{
+#if defined(__aarch64__) || defined(_M_ARM64)
+	__builtin___clear_cache(reinterpret_cast<char*>(address), reinterpret_cast<char*>(address) + size);
+#endif
+}
