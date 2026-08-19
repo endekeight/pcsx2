@@ -5,7 +5,7 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-ANDROID_PROJECT=AndroidSX2_develop
+ANDROID_PROJECT=AndroidSX2
 ANDROID_LIBS_DIR=../$ANDROID_PROJECT/app/libs
 LIBS_ROOT=../$ANDROID_PROJECT/app/src/main/cpp/libs
 LIBS_DIR=$LIBS_ROOT/arm64-v8a
