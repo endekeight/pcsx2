@@ -114,6 +114,14 @@ void MemCheck::JitCleanup()
 
 size_t CBreakPoints::FindBreakpoint(BreakPointCpu cpu, u32 addr, bool matchTemp, bool temp)
 {
+	// Hot path. The EE and IOP dispatch loops call this per instruction via
+	// IsAddressBreakPoint(), which asks twice - once for a normal breakpoint and once for
+	// an overlapping temporary one. With no breakpoints set, which is every session that
+	// is not actively being debugged, there is nothing to search and both the address
+	// standardisation below and the loop's size() call are pure overhead.
+	if (breakPoints_.empty())
+		return INVALID_BREAKPOINT;
+
 	if (cpu == BREAKPOINT_EE)
 		addr = standardizeBreakpointAddress(addr);
 
@@ -129,6 +137,10 @@ size_t CBreakPoints::FindBreakpoint(BreakPointCpu cpu, u32 addr, bool matchTemp,
 
 size_t CBreakPoints::FindMemCheck(BreakPointCpu cpu, u32 start, u32 end)
 {
+	// Same reasoning as FindBreakpoint() above.
+	if (memChecks_.empty())
+		return INVALID_MEMCHECK;
+
 	if (cpu == BREAKPOINT_EE)
 	{
 		start = standardizeBreakpointAddress(start);
