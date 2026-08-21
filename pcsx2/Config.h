@@ -970,7 +970,17 @@ struct Pcsx2Config
 		};
 
 		static constexpr s32 MAX_VOLUME = 200;
+#ifdef __ANDROID__
+		// cubeb is vendored here with no Android backend at all: 3rdparty/cubeb/src
+		// has alsa, pulse, jack, sndio, oss and audiounit, but no cubeb_aaudio.cpp
+		// and no cubeb_opensl.c. With nothing to try, cubeb_init() returns
+		// CUBEB_ERROR (-1) on every boot and SPU2 falls back to null output, which
+		// is why the port had no sound. SDL3 is already linked and its audio path
+		// works on Android, so default to it here.
+		static constexpr AudioBackend DEFAULT_BACKEND = AudioBackend::SDL;
+#else
 		static constexpr AudioBackend DEFAULT_BACKEND = AudioBackend::Cubeb;
+#endif
 		static constexpr SPU2SyncMode DEFAULT_SYNC_MODE = SPU2SyncMode::TimeStretch;
 
 		static std::optional<SPU2SyncMode> ParseSyncMode(const char* str);
