@@ -36,7 +36,12 @@ const char* USB::DeviceTypeIndexToName(s32 device) { return ""; }
 std::string USB::GetConfigSection(int port) { return ""; }
 s32 USB::DeviceTypeNameToIndex(const std::string_view device) { return 0; }
 
-bool USB::DoState(StateWrapper& sw) { return false; }
+// There is no USB emulation in this build, so there is nothing to serialise and
+// writing nothing is the correct result. Returning false made every save state
+// fail outright: SaveState_DownloadState() treats any FreezeOut() failure as
+// fatal ("FreezeOut() failed for USB.bin.") even though SavestateEntry_USB
+// reports IsRequired() == false.
+bool USB::DoState(StateWrapper& sw) { return true; }
 void USB::SetDefaultConfiguration(SettingsInterface* si) {}
 void USB::CheckForConfigChanges(const Pcsx2Config& old_config) {}
 void USB::ClearPortBindings(SettingsInterface& si, u32 port) {}
