@@ -82,7 +82,13 @@ cp -f $BUILD_DIR/common/libcommon.a $LIBS_DIR/libcommon.a
 cp -f $BUILD_DIR/3rdparty/ccc/libccc.a $LIBS_DIR/libccc.a
 cp -f $BUILD_DIR/3rdparty/cpuinfo/libcpuinfo.a $LIBS_DIR/libcpuinfo.a
 cp -f $BUILD_DIR/3rdparty/cubeb/libcubeb.a $LIBS_DIR/libcubeb.a
-cp -f $BUILD_DIR/3rdparty/fmt/libfmtd.a $LIBS_DIR/libfmtd.a
+# fmt appends a 'd' only for Debug builds, so accept either name and install it
+# under the name the Android CMakeLists links against.
+if [ -f "$BUILD_DIR/3rdparty/fmt/libfmtd.a" ]; then
+  cp -f "$BUILD_DIR/3rdparty/fmt/libfmtd.a" "$LIBS_DIR/libfmtd.a"
+else
+  cp -f "$BUILD_DIR/3rdparty/fmt/libfmt.a" "$LIBS_DIR/libfmtd.a"
+fi
 cp -f $BUILD_DIR/3rdparty/glad/libglad.a $LIBS_DIR/libglad.a
 cp -f $BUILD_DIR/3rdparty/imgui/libimgui.a $LIBS_DIR/libimgui.a
 cp -f $BUILD_DIR/3rdparty/libzip/libzip.a $LIBS_DIR/libzip.a
