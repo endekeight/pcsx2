@@ -64,7 +64,13 @@ cmake   -DUSE_OPENGL=1 \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DUSE_BACKTRACE=0 \
+        `# Debug stays: PCSX2_DEVBUILD and _DEBUG come from $<$<CONFIG:Debug>:...>` \
+        `# and AndroidSX2 builds Debug too. Those macros change class layout -` \
+        `# GSTexture gains a member and a virtual under PCSX2_DEVBUILD - so the` \
+        `# two sides must agree. Optimise through the flags instead.` \
         -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_C_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
+        -DCMAKE_CXX_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DQT_BUILD=OFF \
         -DCMAKE_PREFIX_PATH="$DIR/$DEPS" \
         -DCMAKE_TOOLCHAIN_FILE=$NDK_TOOLCHAIN_PATH \
