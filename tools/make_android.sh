@@ -7,9 +7,27 @@ cd "$DIR"
 
 ANDROID_PROJECT=AndroidSX2
 ANDROID_LIBS_DIR=../$ANDROID_PROJECT/app/libs
+
+# This build produces two payloads with different lifetimes, so they go to different
+# places:
+#
+#   headers  (~19 MB) -> yaapsecore. yaapsecore COMPILES against them; it is an OBJECT
+#                        library and never links libpcsx2.a. It is also the permanent
+#                        asset - frontends come and go, so the frontend must not own the
+#                        headers the core needs to build.
+#   archives (~767 MB) -> the frontend. Only the application links them.
+#
+# Every consumer then points its include path at YAAPSECORE_LIBS/include: yaapsecore's own
+# host test suite, AndroidSX2, and any later frontend. That keeps INTEGRATION.md's rule -
+# exactly one source of pcsx2 headers, no fallback search paths - true by construction.
+#
+# Both are overridable so a different layout needs no edit here.
+YAAPSECORE_ROOT=${YAAPSECORE_ROOT:-../yaapsecore}
+YAAPSECORE_LIBS=${YAAPSECORE_LIBS:-$YAAPSECORE_ROOT/libs}
+LIBS_INCLUDE=$YAAPSECORE_LIBS/include
+
 LIBS_ROOT=../$ANDROID_PROJECT/app/src/main/cpp/libs
 LIBS_DIR=$LIBS_ROOT/arm64-v8a
-LIBS_INCLUDE=$LIBS_ROOT/include
 
 BUILD_DIR=build/arm64/android
 DEPS=deps/android
@@ -38,6 +56,15 @@ if [ -d "$LIBS_ROOT" ]; then
 else
 	mkdir -p $LIBS_ROOT
 fi
+
+# The header tree is regenerated wholesale, so a stale header from a previous revision
+# cannot survive into the new one.
+if [ -d "$YAAPSECORE_LIBS" ]; then
+	echo "$YAAPSECORE_LIBS does exist. Clean it up"
+	rm -rf $YAAPSECORE_LIBS/*
+else
+	mkdir -p $YAAPSECORE_LIBS
+fi
 mkdir -p $LIBS_DIR
 mkdir -p $LIBS_INCLUDE
 
@@ -54,7 +81,8 @@ fi
 
 NDK_TOOLCHAIN_PATH=$ANDROID_SDK_PATH/ndk/$NDK/build/cmake/android.toolchain.cmake
 
-INSTALLDIR=$LIBS_ROOT
+# CMAKE_INSTALL_PREFIX is what places the headers, so it points at the header root.
+INSTALLDIR=$YAAPSECORE_LIBS
 
 cmake   -DUSE_OPENGL=1 \
         -DUSE_VULKAN=1 \
