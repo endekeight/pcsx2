@@ -130,14 +130,15 @@ set_target_properties(plutosvg::plutosvg PROPERTIES
 )
 # -------
 
-set(FFMPEG_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/3rdparty/ffmpeg/include")
-
-# Use bundled ffmpeg v4.x.x headers if we can't locate it in the system.
-# We'll try to load it dynamically at runtime.
-find_package(FFMPEG COMPONENTS avcodec avformat avutil swresample swscale)
-if(NOT FFMPEG_FOUND)
-	message(WARNING "FFmpeg not found, using bundled headers.")
-	set(FFMPEG_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/3rdparty/ffmpeg/include")
+# GSCapture is compiled on Android but never links ffmpeg: USE_LINKED_FFMPEG is OFF and
+# the library is dlopen()ed at runtime, which no Android device ships. Only the headers
+# are needed, and they must be the cross-compile ones - a find_package() here would
+# happily hand us the build host's macOS/Linux ffmpeg. Upstream deleted the in-tree
+# 3rdparty/ffmpeg/include copy in cf8d05f4a, so build-dependencies-android.sh installs
+# the ffmpeg 7.1 headers into the Android deps prefix instead.
+set(FFMPEG_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/deps/android/include")
+if(NOT EXISTS "${FFMPEG_INCLUDE_DIRS}/libavcodec/avcodec.h")
+	message(FATAL_ERROR "ffmpeg headers missing from ${FFMPEG_INCLUDE_DIRS}. Re-run .github/workflows/scripts/linux/build-dependencies-android.sh.")
 endif()
 
 include(CheckLib)
