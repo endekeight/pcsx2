@@ -55,6 +55,9 @@ namespace Host
 	void RemoveKeyedOSDMessage(std::string key);
 	void ClearOSDMessages();
 
+	/// Returns the current on-screen message text, or an empty string if none is active.
+	std::string GetActiveOSDMessage();
+
 	/// Displays an asynchronous error on the UI thread, i.e. doesn't block the caller.
 	void ReportInfoAsync(const std::string_view title, const std::string_view message);
 	void ReportFormattedInfoAsync(const std::string_view title, const char* format, ...);
