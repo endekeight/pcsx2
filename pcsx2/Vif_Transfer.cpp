@@ -111,8 +111,10 @@ _vifT static __fi bool vifTransfer(u32 *data, int size, bool TTE) {
 
 // When TTE is set to 1, MADR and QWC are not updated as part of the transfer.
 bool VIF0transfer(u32 *data, int size, bool TTE) {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_DMA_VIF_GIF]++;
 	return vifTransfer<0>(data, size, TTE);
 }
 bool VIF1transfer(u32 *data, int size, bool TTE) {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_DMA_VIF_GIF]++;
 	return vifTransfer<1>(data, size, TTE);
 }

@@ -5,6 +5,7 @@
 #include "FreeSurroundDecoder.h"
 #include "Host.h"
 #include "GS/GSVector.h"
+#include "R5900.h"
 
 #include "common/Assertions.h"
 #include "common/BitUtils.h"
@@ -627,6 +628,7 @@ void AudioStream::StretchDestroy()
 
 void AudioStream::StretchWriteBlock(const float* block)
 {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_AUDIO_STRETCH]++;
 	if (IsStretchEnabled())
 	{
 		m_soundtouch->putSamples(block, CHUNK_SIZE);

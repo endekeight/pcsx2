@@ -35,6 +35,9 @@ using namespace R5900;	// for R5900 disasm tools
 s32 EEsCycle;		// used to sync the IOP to the EE
 u64 EEoCycle;
 
+bool C18_EXEC_WEIGHT = false;
+u64 c18_counts[C18_COUNT_MAX] = {};
+
 alignas(16) cpuRegistersPack _cpuRegistersPack;
 alignas(16) tlbs tlb[48];
 cachedTlbs_t cachedTlbs;
@@ -361,6 +364,53 @@ static bool cpuIntsEnabled(int Interrupt)
 // and the recompiler.  (moved here to help alleviate redundant code)
 __fi void _cpuEventTest_Shared()
 {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_EVENTS_COUNTERS]++;
+
+	if (C18_EXEC_WEIGHT)
+	{
+		static u64 next_dump_cycle = 0;
+		static u64 last_dump_cycle = 0;
+		static u64 last_counts[C18_COUNT_MAX] = {};
+
+		if (next_dump_cycle == 0 || cpuRegs.cycle < last_dump_cycle)
+		{
+			last_dump_cycle = cpuRegs.cycle;
+			next_dump_cycle = cpuRegs.cycle + PS2CLK;
+			for (size_t i = 0; i < C18_COUNT_MAX; ++i)
+				last_counts[i] = c18_counts[i];
+		}
+		else if (cpuRegs.cycle >= next_dump_cycle)
+		{
+			const u64 elapsed = cpuRegs.cycle - last_dump_cycle;
+			const u64 d_mem = c18_counts[C18_MEMORY] - last_counts[C18_MEMORY];
+			const u64 d_audio = c18_counts[C18_AUDIO_MIX] - last_counts[C18_AUDIO_MIX];
+			const u64 d_dma = c18_counts[C18_DMA_VIF_GIF] - last_counts[C18_DMA_VIF_GIF];
+			const u64 d_events = c18_counts[C18_EVENTS_COUNTERS] - last_counts[C18_EVENTS_COUNTERS];
+			const u64 d_runtime = c18_counts[C18_RUNTIME_SUPPORT] - last_counts[C18_RUNTIME_SUPPORT];
+			const u64 d_interp = c18_counts[C18_EE_IOP_INTERP] - last_counts[C18_EE_IOP_INTERP];
+			const u64 d_rec = c18_counts[C18_RECOMPILER_INFRA] - last_counts[C18_RECOMPILER_INFRA];
+			const u64 d_cdvd = c18_counts[C18_CDVD_IO] - last_counts[C18_CDVD_IO];
+			const u64 d_stretch = c18_counts[C18_AUDIO_STRETCH] - last_counts[C18_AUDIO_STRETCH];
+
+			Console.WriteLn("C18WEIGHT: cycles=%llu memory=%llu audio-mix=%llu dma-vif-gif=%llu events-counters=%llu runtime-support=%llu ee-iop-interp=%llu recompiler-infra=%llu cdvd-io=%llu audio-stretch=%llu",
+				static_cast<unsigned long long>(elapsed),
+				static_cast<unsigned long long>(d_mem),
+				static_cast<unsigned long long>(d_audio),
+				static_cast<unsigned long long>(d_dma),
+				static_cast<unsigned long long>(d_events),
+				static_cast<unsigned long long>(d_runtime),
+				static_cast<unsigned long long>(d_interp),
+				static_cast<unsigned long long>(d_rec),
+				static_cast<unsigned long long>(d_cdvd),
+				static_cast<unsigned long long>(d_stretch));
+
+			last_dump_cycle = cpuRegs.cycle;
+			next_dump_cycle = cpuRegs.cycle + PS2CLK;
+			for (size_t i = 0; i < C18_COUNT_MAX; ++i)
+				last_counts[i] = c18_counts[i];
+		}
+	}
+
 	eeEventTestIsActive = true;
 	cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;
 	cpuRegs.lastEventCycle = cpuRegs.cycle;

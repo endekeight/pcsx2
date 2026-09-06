@@ -17,6 +17,22 @@ extern const char* const bios[256];
 extern s32 EEsCycle;
 extern u64 EEoCycle;
 
+enum C18Slot : size_t {
+	C18_MEMORY = 0,
+	C18_AUDIO_MIX,
+	C18_DMA_VIF_GIF,
+	C18_EVENTS_COUNTERS,
+	C18_RUNTIME_SUPPORT,
+	C18_EE_IOP_INTERP,
+	C18_RECOMPILER_INFRA,
+	C18_CDVD_IO,
+	C18_AUDIO_STRETCH,
+	C18_COUNT_MAX,
+};
+
+extern bool C18_EXEC_WEIGHT;
+extern u64 c18_counts[C18_COUNT_MAX];
+
 union GPR_reg {   // Declare union type GPR register
 	u128 UQ;
 	s128 SQ;

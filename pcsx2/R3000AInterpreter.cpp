@@ -234,6 +234,7 @@ static __fi void execI()
 }
 
 static void doBranch(s32 tar) {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_EE_IOP_INTERP]++;
 	if (tar == 0x0)
 		DevCon.Warning("[R3000 Interpreter] Warning: Branch to 0x0!");
 

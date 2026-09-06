@@ -1422,6 +1422,7 @@ namespace R3000A
 
 	int irxImportExec(u32 import_table, u16 index)
 	{
+		if (C18_EXEC_WEIGHT) c18_counts[C18_RUNTIME_SUPPORT]++;
 		if (!import_table)
 			return 0;
 
