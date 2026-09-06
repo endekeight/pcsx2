@@ -8,6 +8,7 @@
 #include "SPU2/interpolate_table.h"
 
 #include "common/Assertions.h"
+#include "R5900.h"
 
 // LOOP/END sets the ENDX bit and sets NAX to LSA, and the voice is muted if LOOP is not set
 // LOOP seems to only have any effect on the block with LOOP/END set, where it prevents muting the voice
@@ -521,6 +522,7 @@ static __forceinline StereoOut32 MixCore(const uint coreidx, const VoiceMixSet& 
 
 void spu2Mix()
 {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_AUDIO_MIX]++;
 	// Note: Playmode 4 is SPDIF, which overrides other inputs.
 	StereoOut32 InputData[2] =
 		{

@@ -6,6 +6,7 @@
 
 #include "ATA.h"
 #include "DEV9/DEV9.h"
+#include "R5900.h"
 
 #if _WIN32
 #include "pathcch.h"
@@ -513,6 +514,7 @@ void ATA::Write(u32 addr, u16 value, int width)
 
 void ATA::Async(uint cycles)
 {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_CDVD_IO]++;
 	if (!hddImage)
 		return;
 

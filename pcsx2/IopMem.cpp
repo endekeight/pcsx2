@@ -195,6 +195,7 @@ u16 iopMemRead16(u32 mem)
 
 u32 iopMemRead32(u32 mem)
 {
+	if (C18_EXEC_WEIGHT) c18_counts[C18_MEMORY]++;
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
