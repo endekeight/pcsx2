@@ -89,6 +89,7 @@ set(pcsx2Sources
 	IopDma.cpp
 	IopGte.cpp
 	IopHw.cpp
+	IopImportTable.cpp
 	IopIrq.cpp
 	IopMem.cpp
 	PINE.cpp
@@ -170,6 +171,8 @@ set(pcsx2Headers
 	IopDma.h
 	IopGte.h
 	IopHw.h
+	IopImportTable.h
+	IopImportTableData.h
 	IopMem.h
 	LayeredSettingsInterface.h
 	PINE.h
