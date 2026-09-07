@@ -391,8 +391,16 @@ __fi void _cpuEventTest_Shared()
 			const u64 d_rec = c18_counts[C18_RECOMPILER_INFRA] - last_counts[C18_RECOMPILER_INFRA];
 			const u64 d_cdvd = c18_counts[C18_CDVD_IO] - last_counts[C18_CDVD_IO];
 			const u64 d_stretch = c18_counts[C18_AUDIO_STRETCH] - last_counts[C18_AUDIO_STRETCH];
+#if C47_VOICE_STATS
+			const u64 d_voices_total = c18_counts[C18_AUDIO_VOICES_TOTAL] - last_counts[C18_AUDIO_VOICES_TOTAL];
+			const u64 d_voices_active = c18_counts[C18_AUDIO_VOICES_ACTIVE] - last_counts[C18_AUDIO_VOICES_ACTIVE];
+#endif
 
-			Console.WriteLn("C18WEIGHT: cycles=%llu memory=%llu audio-mix=%llu dma-vif-gif=%llu events-counters=%llu runtime-support=%llu ee-iop-interp=%llu recompiler-infra=%llu cdvd-io=%llu audio-stretch=%llu",
+			Console.WriteLn("C18WEIGHT: cycles=%llu memory=%llu audio-mix=%llu dma-vif-gif=%llu events-counters=%llu runtime-support=%llu ee-iop-interp=%llu recompiler-infra=%llu cdvd-io=%llu audio-stretch=%llu"
+#if C47_VOICE_STATS
+				" audio-voices-total=%llu audio-voices-active=%llu"
+#endif
+				,
 				static_cast<unsigned long long>(elapsed),
 				static_cast<unsigned long long>(d_mem),
 				static_cast<unsigned long long>(d_audio),
@@ -402,7 +410,13 @@ __fi void _cpuEventTest_Shared()
 				static_cast<unsigned long long>(d_interp),
 				static_cast<unsigned long long>(d_rec),
 				static_cast<unsigned long long>(d_cdvd),
-				static_cast<unsigned long long>(d_stretch));
+				static_cast<unsigned long long>(d_stretch)
+#if C47_VOICE_STATS
+				,
+				static_cast<unsigned long long>(d_voices_total),
+				static_cast<unsigned long long>(d_voices_active)
+#endif
+				);
 
 			last_dump_cycle = cpuRegs.cycle;
 			next_dump_cycle = cpuRegs.cycle + PS2CLK;
