@@ -374,6 +374,10 @@ static __forceinline StereoOut32 MixVoice(uint coreidx, uint voiceidx)
 	V_Core& thiscore(Cores[coreidx]);
 	V_Voice& vc(thiscore.Voices[voiceidx]);
 
+#if C47_VOICE_STATS
+	if (C18_EXEC_WEIGHT) c18_counts[C18_AUDIO_VOICES_TOTAL]++;
+#endif
+
 	// Most games don't use much volume slide effects.  So only call the UpdateVolume
 	// methods when needed by checking the flag outside the method here...
 	// (Note: Ys 6 : Ark of Nephistm uses these effects)
@@ -387,6 +391,9 @@ static __forceinline StereoOut32 MixVoice(uint coreidx, uint voiceidx)
 
 	if (vc.ADSR.Phase > V_ADSR::PHASE_STOPPED)
 	{
+#if C47_VOICE_STATS
+		if (C18_EXEC_WEIGHT) c18_counts[C18_AUDIO_VOICES_ACTIVE]++;
+#endif
 		if (vc.Noise)
 			Value = GetNoiseValues(thiscore);
 		else

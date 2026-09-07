@@ -27,8 +27,13 @@ enum C18Slot : size_t {
 	C18_RECOMPILER_INFRA,
 	C18_CDVD_IO,
 	C18_AUDIO_STRETCH,
+	C18_AUDIO_VOICES_TOTAL,
+	C18_AUDIO_VOICES_ACTIVE,
 	C18_COUNT_MAX,
 };
+
+// MixVoice occupancy (total vs audible). Measured at 10.88% fps when enabled; leave at 0.
+#define C47_VOICE_STATS 0
 
 extern bool C18_EXEC_WEIGHT;
 extern u64 c18_counts[C18_COUNT_MAX];
