@@ -97,6 +97,14 @@ void iopMemReset()
 
 u8 iopMemRead8(u32 mem)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		u32 servedValue = 0;
+		if (IopShadowServeRead(mem, 1, servedValue))
+			return static_cast<u8>(servedValue);
+	}
+#endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -135,6 +143,14 @@ u8 iopMemRead8(u32 mem)
 
 u16 iopMemRead16(u32 mem)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		u32 servedValue = 0;
+		if (IopShadowServeRead(mem, 2, servedValue))
+			return static_cast<u16>(servedValue);
+	}
+#endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -195,6 +211,14 @@ u16 iopMemRead16(u32 mem)
 
 u32 iopMemRead32(u32 mem)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		u32 servedValue = 0;
+		if (IopShadowServeRead(mem, 4, servedValue))
+			return static_cast<u32>(servedValue);
+	}
+#endif
 	if (C18_EXEC_WEIGHT) c18_counts[C18_MEMORY]++;
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
@@ -260,6 +284,13 @@ u32 iopMemRead32(u32 mem)
 
 void iopMemWrite8(u32 mem, u8 value)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		IopShadowRecordWrite(mem, value, 1);
+		return;
+	}
+#endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -307,6 +338,13 @@ void iopMemWrite8(u32 mem, u8 value)
 
 void iopMemWrite16(u32 mem, u16 value)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		IopShadowRecordWrite(mem, value, 2);
+		return;
+	}
+#endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -380,6 +418,13 @@ void iopMemWrite16(u32 mem, u16 value)
 
 void iopMemWrite32(u32 mem, u32 value)
 {
+#if IOP_DIFFERENTIAL_SHADOW
+	if (iopDifferentialShadowActive)
+	{
+		IopShadowRecordWrite(mem, value, 4);
+		return;
+	}
+#endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 

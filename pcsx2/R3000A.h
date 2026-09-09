@@ -194,6 +194,26 @@ extern void psxReset();
 extern void psxException(u32 code, u32 step);
 extern void iopEventTest();
 
+// D12 (docs/specs/2026-09-09-D12-iop-interpreter-differential.md). When 1, doBranch()
+// consults iopDifferentialShadowActive and skips iopEventTest() while the differential's
+// shadow pass is running an already-executed guest span under the interpreter. Firing the
+// event test there would dispatch interrupts a second time, on a register file that is
+// about to be discarded. Default 0: the test is compiled out and the interpreter is
+// byte-identical to upstream.
+#define IOP_DIFFERENTIAL_SHADOW 0
+
+#if IOP_DIFFERENTIAL_SHADOW
+extern bool iopDifferentialShadowActive;
+
+// Returns true when the shadow pass served this read; `value` then holds the served value
+// and the caller must not touch real memory. Returns false when the caller should perform
+// the read normally (a RAM address the log did not cover).
+bool IopShadowServeRead(u32 address, u32 width, u32& value);
+
+// Records a shadow-pass write. The caller must not perform the write.
+void IopShadowRecordWrite(u32 address, u32 value, u32 width);
+#endif
+
 int psxIsBreakpointNeeded(u32 addr);
 int psxIsMemcheckNeeded(u32 pc);
 

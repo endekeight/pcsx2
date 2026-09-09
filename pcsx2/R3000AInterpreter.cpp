@@ -259,6 +259,9 @@ static void doBranch(s32 tar) {
 	iopIsDelaySlot = false;
 	psxRegs.pc = branchPC;
 
+#if IOP_DIFFERENTIAL_SHADOW
+	if (!iopDifferentialShadowActive)
+#endif
 	iopEventTest();
 }
 
