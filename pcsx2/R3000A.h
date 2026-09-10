@@ -212,6 +212,10 @@ bool IopShadowServeRead(u32 address, u32 width, u32& value);
 
 // Records a shadow-pass write. The caller must not perform the write.
 void IopShadowRecordWrite(u32 address, u32 value, u32 width);
+
+// Authority-side (compiled-block) access through iopMemRead*/iopMemWrite*.
+void IopAuthorityLogRead(u32 address, u32 value, u32 width);
+void IopAuthorityLogWrite(u32 address, u32 value, u32 width);
 #endif
 
 int psxIsBreakpointNeeded(u32 addr);

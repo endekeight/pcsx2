@@ -95,7 +95,11 @@ void iopMemReset()
 	std::memset(iopMem, 0, sizeof(*iopMem));
 }
 
+#if IOP_DIFFERENTIAL_SHADOW
+static u8 iopMemRead8Unlogged(u32 mem)
+#else
 u8 iopMemRead8(u32 mem)
+#endif
 {
 #if IOP_DIFFERENTIAL_SHADOW
 	if (iopDifferentialShadowActive)
@@ -141,7 +145,21 @@ u8 iopMemRead8(u32 mem)
 	}
 }
 
+#if IOP_DIFFERENTIAL_SHADOW
+u8 iopMemRead8(u32 mem)
+{
+	const u8 value = iopMemRead8Unlogged(mem);
+	if (!iopDifferentialShadowActive)
+		IopAuthorityLogRead(mem, value, 1);
+	return value;
+}
+#endif
+
+#if IOP_DIFFERENTIAL_SHADOW
+static u16 iopMemRead16Unlogged(u32 mem)
+#else
 u16 iopMemRead16(u32 mem)
+#endif
 {
 #if IOP_DIFFERENTIAL_SHADOW
 	if (iopDifferentialShadowActive)
@@ -209,7 +227,21 @@ u16 iopMemRead16(u32 mem)
 	}
 }
 
+#if IOP_DIFFERENTIAL_SHADOW
+u16 iopMemRead16(u32 mem)
+{
+	const u16 value = iopMemRead16Unlogged(mem);
+	if (!iopDifferentialShadowActive)
+		IopAuthorityLogRead(mem, value, 2);
+	return value;
+}
+#endif
+
+#if IOP_DIFFERENTIAL_SHADOW
+static u32 iopMemRead32Unlogged(u32 mem)
+#else
 u32 iopMemRead32(u32 mem)
+#endif
 {
 #if IOP_DIFFERENTIAL_SHADOW
 	if (iopDifferentialShadowActive)
@@ -282,6 +314,16 @@ u32 iopMemRead32(u32 mem)
 	}
 }
 
+#if IOP_DIFFERENTIAL_SHADOW
+u32 iopMemRead32(u32 mem)
+{
+	const u32 value = iopMemRead32Unlogged(mem);
+	if (!iopDifferentialShadowActive)
+		IopAuthorityLogRead(mem, value, 4);
+	return value;
+}
+#endif
+
 void iopMemWrite8(u32 mem, u8 value)
 {
 #if IOP_DIFFERENTIAL_SHADOW
@@ -290,6 +332,7 @@ void iopMemWrite8(u32 mem, u8 value)
 		IopShadowRecordWrite(mem, value, 1);
 		return;
 	}
+	IopAuthorityLogWrite(mem, value, 1);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
@@ -344,6 +387,7 @@ void iopMemWrite16(u32 mem, u16 value)
 		IopShadowRecordWrite(mem, value, 2);
 		return;
 	}
+	IopAuthorityLogWrite(mem, value, 2);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
@@ -424,6 +468,7 @@ void iopMemWrite32(u32 mem, u32 value)
 		IopShadowRecordWrite(mem, value, 4);
 		return;
 	}
+	IopAuthorityLogWrite(mem, value, 4);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
