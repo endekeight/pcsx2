@@ -332,7 +332,7 @@ void iopMemWrite8(u32 mem, u8 value)
 		IopShadowRecordWrite(mem, value, 1);
 		return;
 	}
-	IopAuthorityLogWrite(mem, value, 1);
+	const IopAuthorityWriteScope authorityWriteScope(mem, value, 1);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
@@ -387,7 +387,7 @@ void iopMemWrite16(u32 mem, u16 value)
 		IopShadowRecordWrite(mem, value, 2);
 		return;
 	}
-	IopAuthorityLogWrite(mem, value, 2);
+	const IopAuthorityWriteScope authorityWriteScope(mem, value, 2);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
@@ -468,7 +468,7 @@ void iopMemWrite32(u32 mem, u32 value)
 		IopShadowRecordWrite(mem, value, 4);
 		return;
 	}
-	IopAuthorityLogWrite(mem, value, 4);
+	const IopAuthorityWriteScope authorityWriteScope(mem, value, 4);
 #endif
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
