@@ -216,6 +216,20 @@ void IopShadowRecordWrite(u32 address, u32 value, u32 width);
 // Authority-side (compiled-block) access through iopMemRead*/iopMemWrite*.
 void IopAuthorityLogRead(u32 address, u32 value, u32 width);
 void IopAuthorityLogWrite(u32 address, u32 value, u32 width);
+
+// Authority-side store nesting. Only the outermost entry into iopMemWrite* is a guest store;
+// writes performed while servicing it (for example a DMA copy started by a hardware register
+// write) are not journalled. Returns true when the store was journalled.
+bool IopAuthorityEnterWrite(u32 address, u32 value, u32 width);
+void IopAuthorityLeaveWrite();
+
+struct IopAuthorityWriteScope
+{
+	IopAuthorityWriteScope(u32 address, u32 value, u32 width) { IopAuthorityEnterWrite(address, value, width); }
+	~IopAuthorityWriteScope() { IopAuthorityLeaveWrite(); }
+	IopAuthorityWriteScope(const IopAuthorityWriteScope&) = delete;
+	IopAuthorityWriteScope& operator=(const IopAuthorityWriteScope&) = delete;
+};
 #endif
 
 int psxIsBreakpointNeeded(u32 addr);
