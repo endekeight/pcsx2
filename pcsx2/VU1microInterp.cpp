@@ -44,7 +44,15 @@ static void _vu1Exec(VURegs* VU)
 	}
 	if (ptr[1] & 0x10000000) // D flag
 	{
-		if (VU0.VI[REG_FBRST].UL & 0x400)
+		if (THREAD_VU1)
+		{
+			if (vu1Thread.vuFBRST & 0x400)
+			{
+				vu1Thread.mtvuInterrupts.fetch_or(VU_Thread::InterruptFlagVUTBit, std::memory_order_release);
+				VU->ebit = 1;
+			}
+		}
+		else if (VU0.VI[REG_FBRST].UL & 0x400)
 		{
 			VU0.VI[REG_VPU_STAT].UL |= 0x200;
 			hwIntcIrq(INTC_VU1);
@@ -53,7 +61,15 @@ static void _vu1Exec(VURegs* VU)
 	}
 	if (ptr[1] & 0x08000000) // T flag
 	{
-		if (VU0.VI[REG_FBRST].UL & 0x800)
+		if (THREAD_VU1)
+		{
+			if (vu1Thread.vuFBRST & 0x800)
+			{
+				vu1Thread.mtvuInterrupts.fetch_or(VU_Thread::InterruptFlagVUTBit, std::memory_order_release);
+				VU->ebit = 1;
+			}
+		}
+		else if (VU0.VI[REG_FBRST].UL & 0x800)
 		{
 			VU0.VI[REG_VPU_STAT].UL |= 0x400;
 			hwIntcIrq(INTC_VU1);
@@ -191,15 +207,22 @@ static void _vu1Exec(VURegs* VU)
 		{
 			VU->VIBackupCycles = 0;
 			_vuFlushAll(VU);
-			VU0.VI[REG_VPU_STAT].UL &= ~0x100;
-			vif1Regs.stat.VEW = false;
+			if (THREAD_VU1)
+			{
+				vu1Thread.mtvuInterrupts.fetch_or(VU_Thread::InterruptFlagVUEBit, std::memory_order_release);
+			}
+			else
+			{
+				VU0.VI[REG_VPU_STAT].UL &= ~0x100;
+				vif1Regs.stat.VEW = false;
+			}
 
 			if(VU1.xgkickenable)
 				_vuXGKICKTransfer(0, true);
 			// In instant VU mode, VU1 goes WAY ahead of the CPU, making the XGKick fall way behind
 			// We also have some code to update it in VIF Unpacks too, since in some games (Aggressive Inline) overwrite the XGKick data
 			// VU currently flushes XGKICK on end, so this isn't needed, yet
-			if (INSTANT_VU1)
+			if (!THREAD_VU1 && INSTANT_VU1)
 				VU1.xgkicklastcycle = cpuRegs.cycle;
 		}
 	}
@@ -265,16 +288,24 @@ void InterpVU1::Execute(u32 cycles)
 
 	while ((VU1.cycle - startcycles) < cycles)
 	{
-		if (!(VU0.VI[REG_VPU_STAT].UL & 0x100))
+		if (!THREAD_VU1)
 		{
-			if (VU1.branch == 1)
+			if (!(VU0.VI[REG_VPU_STAT].UL & 0x100))
 			{
-				VU1.VI[REG_TPC].UL = VU1.branchpc;
-				VU1.branch = 0;
+				if (VU1.branch == 1)
+				{
+					VU1.VI[REG_TPC].UL = VU1.branchpc;
+					VU1.branch = 0;
+				}
+				break;
 			}
-			break;
 		}
+
+		// Under MTVU, the EE thread clears VPU_STAT before queuing, so stop after the E-bit step.
+		const bool ending = (VU1.ebit == 1);
 		Step();
+		if (THREAD_VU1 && ending)
+			break;
 	}
 	VU1.VI[REG_TPC].UL >>= 3;
 	VU1.nextBlockCycles = (VU1.cycle - cpuRegs.cycle) + 1;

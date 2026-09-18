@@ -1137,7 +1137,12 @@ __fi u32* GET_VU_MEM(VURegs* VU, u32 addr) // non-static, also used by sVU for n
 	if (VU == &vuRegs[1])
 		return (u32*)(vuRegs[1].Mem + (addr & 0x3fff));
 	else if (addr & 0x4000)
+	{
+		// VU0 runs on the EE thread; VU1's registers belong to the worker until it drains.
+		if (THREAD_VU1)
+			vu1Thread.WaitVU();
 		return (u32*)((u8*)vuRegs[1].VF + (addr & 0x3ff)); // get VF and VI regs (they're mapped to 0x4xx0 in VU0 mem!)
+	}
 	else
 		return (u32*)(vuRegs[0].Mem + (addr & 0xfff)); // for addr 0x0000 to 0x4000 just wrap around
 }
@@ -1862,19 +1867,19 @@ void _vuXGKICKTransfer(s32 cycles, bool flush)
 
 		// Would be "nicer" to do the copy until it's all up, however this really screws up PATH3 masking stuff
 		// So lets just do it the other way :)
-		/*if (THREAD_VU1)
+		if (THREAD_VU1)
 		{
 			if ((transfersize * 0x10) < VU1.xgkicksizeremaining)
 				gifUnit.gifPath[GIF_PATH_1].CopyGSPacketData(&VU1.Mem[VU1.xgkickaddr], transfersize * 0x10, true);
 			else
 				gifUnit.TransferGSPacketData(GIF_TRANS_XGKICK, &vuRegs[1].Mem[VU1.xgkickaddr], transfersize * 0x10, true);
 		}
-		else*/
-		//{
+		else
+		{
 			gifUnit.TransferGSPacketData(GIF_TRANS_XGKICK, &vuRegs[1].Mem[VU1.xgkickaddr], transfersize * 0x10, true);
-		//}
+		}
 
-		if ((VU0.VI[REG_VPU_STAT].UL & 0x100) && flush)
+		if ((THREAD_VU1 || (VU0.VI[REG_VPU_STAT].UL & 0x100)) && flush)
 			VU1.cycle += transfersize * 2;
 
 		VU1.xgkickcyclecount -= transfersize * 2;
@@ -1889,12 +1894,16 @@ void _vuXGKICKTransfer(s32 cycles, bool flush)
 		{
 			VUM_LOG("XGKICK transfer finished");
 			VU1.xgkickenable = false;
-			VU0.VI[REG_VPU_STAT].UL &= ~(1 << 12);
-			// Check if VIF is waiting for the GIF to not be busy
-			if (vif1Regs.stat.VGW)
+			// Worker must not touch EE-thread state.
+			if (!THREAD_VU1)
 			{
-				vif1Regs.stat.VGW = false;
-				CPU_INT(DMAC_VIF1, 8);
+				VU0.VI[REG_VPU_STAT].UL &= ~(1 << 12);
+				// Check if VIF is waiting for the GIF to not be busy
+				if (vif1Regs.stat.VGW)
+				{
+					vif1Regs.stat.VGW = false;
+					CPU_INT(DMAC_VIF1, 8);
+				}
 			}
 		}
 	}
@@ -1923,7 +1932,9 @@ static __ri void _vuXGKICK(VURegs* VU)
 	// XGKick command counts as one cycle for the transfer.
 	// Can be tested with Resident Evil: Outbreak, Kingdom Hearts, CART Fury.
 	VU->xgkickcyclecount = 1;
-	VU0.VI[REG_VPU_STAT].UL |= (1 << 12);
+	// Worker must not touch EE-thread state.
+	if (!THREAD_VU1)
+		VU0.VI[REG_VPU_STAT].UL |= (1 << 12);
 	VUM_LOG("XGKICK addr %x", addr);
 }
 
