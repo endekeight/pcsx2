@@ -53,7 +53,7 @@ void vuMemReset()
 
 bool SaveStateBase::vuMicroFreeze()
 {
-	if(IsSaving())
+	if (IsSaving() || THREAD_VU1)
 		vu1Thread.WaitVU();
 
 	if (!FreezeTag("vuMicroRegs"))

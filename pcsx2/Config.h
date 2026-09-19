@@ -1503,8 +1503,10 @@ namespace EmuFolders
 #define REC_VU1 (EmuConfig.Cpu.Recompiler.EnableVU1)
 #define THREAD_VU1 (REC_VU1 && EmuConfig.Speedhacks.vuThread)
 #else
-#define THREAD_VU1 false
+// Non-x86 builds have no microVU. A VU1 recompiler, if any, is supplied outside this tree,
+// so threaded VU1 depends only on the setting.
 #define REC_VU1 false
+#define THREAD_VU1 (EmuConfig.Speedhacks.vuThread)
 #endif
 #define INSTANT_VU1 (EmuConfig.Speedhacks.vu1Instant)
 #define CHECK_EEREC (EmuConfig.Cpu.Recompiler.EnableEE)
