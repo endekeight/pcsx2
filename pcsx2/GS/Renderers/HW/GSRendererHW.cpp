@@ -7025,7 +7025,17 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		(m_conf.ps.IsFeedbackLoopDepth() && !features.depth_feedback) ||
 		
 		// Force SW blending with barriers.
-		GSConfig.UseDebugBlend;
+		GSConfig.UseDebugBlend
+#if GS_DUAL_SOURCE_FALLBACK
+		// Device has no dual-source blending, and this draw would read the second shader
+		// colour output (including blend_mix, which later assigns SRC1_COLOR). Blend in
+		// the shader only when the framebuffer is readable; otherwise the safety net at
+		// the end of this function rewrites leftover SRC1_* factors to defined ones.
+		|| (!features.dual_source_blend &&
+			(GSDevice::IsDualSourceBlendFactor(blend.src) || GSDevice::IsDualSourceBlendFactor(blend.dst) || blend_mix) &&
+			(features.framebuffer_fetch || features.feedback_loops()))
+#endif
+		;
 	
 	if (force_sw_blending)
 	{
@@ -7525,6 +7535,32 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		date_options.primid = false;
 		date_options.barrier = true;
 	}
+
+#if GS_DUAL_SOURCE_FALLBACK
+	if (!features.dual_source_blend)
+	{
+		const auto replace_dual_source_factor = [](u8 factor) -> u8 {
+			if (!GSDevice::IsDualSourceBlendFactor(factor))
+				return factor;
+			const u8 replacement = GSDevice::ApproximateWithoutDualSource(factor);
+			static bool s_logged_dual_source_approx = false;
+			if (!s_logged_dual_source_approx)
+			{
+				Console.Warning("GSDUALSRC: approximated blend factor %u -> %u", factor, replacement);
+				s_logged_dual_source_approx = true;
+			}
+			return replacement;
+		};
+		m_conf.blend.src_factor = replace_dual_source_factor(m_conf.blend.src_factor);
+		m_conf.blend.dst_factor = replace_dual_source_factor(m_conf.blend.dst_factor);
+		m_conf.blend.src_factor_alpha = replace_dual_source_factor(m_conf.blend.src_factor_alpha);
+		m_conf.blend.dst_factor_alpha = replace_dual_source_factor(m_conf.blend.dst_factor_alpha);
+		m_conf.blend_multi_pass.blend.src_factor = replace_dual_source_factor(m_conf.blend_multi_pass.blend.src_factor);
+		m_conf.blend_multi_pass.blend.dst_factor = replace_dual_source_factor(m_conf.blend_multi_pass.blend.dst_factor);
+		m_conf.blend_multi_pass.blend.src_factor_alpha = replace_dual_source_factor(m_conf.blend_multi_pass.blend.src_factor_alpha);
+		m_conf.blend_multi_pass.blend.dst_factor_alpha = replace_dual_source_factor(m_conf.blend_multi_pass.blend.dst_factor_alpha);
+	}
+#endif
 }
 
 // In certain cases using a ROV with depth or color will force the other one

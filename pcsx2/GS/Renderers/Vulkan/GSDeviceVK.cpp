@@ -2764,6 +2764,11 @@ bool GSDeviceVK::CheckFeatures()
 
 	m_features.framebuffer_fetch =
 		m_optional_extensions.vk_ext_rasterization_order_attachment_access && !GSConfig.DisableFramebufferFetch;
+	// Behind the flag so that a flag-off build is byte-identical to the build
+	// before this capability existed; nothing reads the field when it is 0.
+	#if GS_DUAL_SOURCE_FALLBACK
+	m_features.dual_source_blend = true;
+	#endif
 	m_features.texture_barrier = GSConfig.OverrideTextureBarriers != 0;
 	m_features.multidraw_fb_copy = false;
 	m_features.broken_point_sampler = false;
