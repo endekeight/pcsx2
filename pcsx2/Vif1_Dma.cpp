@@ -264,6 +264,10 @@ __fi void vif1VUFinish()
 		//Check if VIF is already scheduled to interrupt, if it's waiting, kick it :P
 		if ((cpuRegs.interrupt & ((1 << DMAC_VIF1) | (1 << DMAC_MFIFO_VIF))) == 0 && vif1ch.chcr.STR && !vif1Regs.stat.test(VIF1_STAT_VSS | VIF1_STAT_VIS | VIF1_STAT_VFS))
 		{
+#if C71_MFIFO_STATS
+			if (dmacRegs.ctrl.MFD == MFD_VIF1)
+				c71_counts[C71_INT_DIRECT]++;
+#endif
 			if (dmacRegs.ctrl.MFD == MFD_VIF1)
 				vifMFIFOInterrupt();
 			else
@@ -297,6 +301,9 @@ __fi void vif1Interrupt()
 		if (vif1ch.chcr.MOD == NORMAL_MODE)
 			Console.WriteLn("MFIFO mode is normal (which isn't normal here)! %x", vif1ch.chcr._u32);
 		vif1Regs.stat.FQC = std::min((u32)0x10, vif1ch.qwc);
+#if C71_MFIFO_STATS
+		c71_counts[C71_INT_DIRECT]++;
+#endif
 		vifMFIFOInterrupt();
 		return;
 	}

@@ -124,6 +124,10 @@ void FireMFIFOEmpty()
 // Write 'size' bytes to memory address 'addr' from 'data'.
 __ri bool hwMFIFOWrite(u32 addr, const u128* data, uint qwc)
 {
+#if C71_MFIFO_STATS
+	c71_counts[C71_HWMFIFO_WRITES]++;
+	c71_counts[C71_HWMFIFO_QWC] += qwc;
+#endif
 	// all FIFO addresses should always be QWC-aligned.
 	pxAssert((dmacRegs.rbor.ADDR & 15) == 0);
 	pxAssert((addr & 15) == 0);

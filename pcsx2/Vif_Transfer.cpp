@@ -35,6 +35,10 @@ _vifT void vifTransferLoop(u32* &data) {
 			vifXRegs.code = data[0];
 			vifX.cmd	  = data[0] >> 24;
 
+#if C71_MFIFO_STATS
+			if constexpr (idx == 1)
+				c71_vifcode_starts[vifX.cmd & 0x7f]++;
+#endif
 
 			VIF_LOG("New VifCMD %x tagsize %x irq %d", vifX.cmd, vifX.tag.size, vifX.irq);
 			if (IsDevBuild && TraceLogging.EE.VIFcode.IsActive()) {
@@ -43,6 +47,10 @@ _vifT void vifTransferLoop(u32* &data) {
 			}
 		}
 
+#if C71_MFIFO_STATS
+		if constexpr (idx == 1)
+			c71_counts[C71_VIFCODE_CALLS]++;
+#endif
 		ret = vifCmdHandler[idx][vifX.cmd & 0x7f](vifX.pass, data);
 		data   += ret;
 		pSize  -= ret;
@@ -116,5 +124,9 @@ bool VIF0transfer(u32 *data, int size, bool TTE) {
 }
 bool VIF1transfer(u32 *data, int size, bool TTE) {
 	if (C18_EXEC_WEIGHT) c18_counts[C18_DMA_VIF_GIF]++;
+#if C71_MFIFO_STATS
+	c71_counts[C71_VIF1_TRANSFER_CALLS]++;
+	c71_counts[C71_VIF1_TRANSFER_WORDS] += size;
+#endif
 	return vifTransfer<1>(data, size, TTE);
 }

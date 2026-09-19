@@ -46,12 +46,20 @@ static __fi bool mfifoVIF1rbTransfer()
 		return true; //Cant do anything, lets forget it
 	}
 
+#if C71_MFIFO_STATS
+	c71_counts[C71_RB_TRANSFERS]++;
+	c71_cur_qwc += mfifoqwc;
+#endif
+
 	/* Check if the transfer should wrap around the ring buffer */
 	if ((vif1ch.madr + (mfifoqwc << 4)) > (msize))
 	{
 		const int s1 = ((msize)-vif1ch.madr) >> 2;
 
 		VIF_LOG("Split MFIFO");
+#if C71_MFIFO_STATS
+		c71_counts[C71_RB_WRAPS]++;
+#endif
 
 		/* it does, so first copy 's1' bytes from 'addr' to 'data' */
 		vif1ch.madr = qwctag(vif1ch.madr);
@@ -115,6 +123,9 @@ static __fi void mfifo_VIF1chain()
 			VIF_LOG("VIF MFIFO Empty before transfer");
 			vif1.inprogress |= 0x10;
 			g_vif1Cycles += 4;
+#if C71_MFIFO_STATS
+			c71_counts[C71_EMPTY_BEFORE_XFER]++;
+#endif
 			return;
 		}
 
@@ -136,6 +147,10 @@ static __fi void mfifo_VIF1chain()
 		if (pMem == nullptr)
 			return;
 
+#if C71_MFIFO_STATS
+		c71_counts[C71_NONMFIFO_XFERS]++;
+		c71_cur_qwc += vif1ch.qwc;
+#endif
 		if (vif1.irqoffset.enabled)
 			VIF1transfer((u32*)pMem + vif1.irqoffset.value, vif1ch.qwc * 4 - vif1.irqoffset.value);
 		else
@@ -183,11 +198,17 @@ void mfifoVIF1transfer()
 			VIF_LOG("VIF MFIFO Empty before tag");
 			vif1.inprogress |= 0x10;
 			g_vif1Cycles += 4;
+#if C71_MFIFO_STATS
+			c71_counts[C71_EMPTY_BEFORE_TAG]++;
+#endif
 			return;
 		}
 
 		vif1ch.tadr = qwctag(vif1ch.tadr);
 		ptag = dmaGetAddr(vif1ch.tadr, false);
+#if C71_MFIFO_STATS
+		c71_counts[C71_TAG_READS]++;
+#endif
 
 		if (dmacRegs.ctrl.STD == STD_VIF1 && (ptag->ID == TAG_REFS))
 		{
@@ -261,11 +282,31 @@ void mfifoVIF1transfer()
 
 void vifMFIFOInterrupt()
 {
+#if C71_MFIFO_STATS
+	struct C71InterruptGuard
+	{
+		u64 saved;
+		C71InterruptGuard()
+		{
+			saved = c71_cur_qwc;
+			c71_cur_qwc = 0;
+		}
+		~C71InterruptGuard()
+		{
+			c71_interrupt_end();
+			c71_cur_qwc = saved;
+		}
+	} c71_guard;
+	c71_counts[C71_INT_ENTRIES]++;
+#endif
 	g_vif1Cycles = 0;
 	VIF_LOG("vif mfifo interrupt");
 
 	if (dmacRegs.ctrl.MFD != MFD_VIF1)
 	{
+#if C71_MFIFO_STATS
+		c71_counts[C71_INT_NOT_MFD]++;
+#endif
 		vif1Interrupt();
 		return;
 	}
@@ -288,6 +329,9 @@ void vifMFIFOInterrupt()
 			GUNIT_WARN("vifMFIFOInterrupt() - Waiting for Path 2 to be ready");
 			CPU_INT(DMAC_MFIFO_VIF, 128);
 			CPU_SET_DMASTALL(DMAC_MFIFO_VIF, true);
+#if C71_MFIFO_STATS
+			c71_counts[C71_RET_PATH2]++;
+#endif
 			return;
 		}
 	}
@@ -296,6 +340,9 @@ void vifMFIFOInterrupt()
 		//DevCon.Warning("Waiting on VU1 MFIFO");
 		CPU_INT(VIF_VU1_FINISH, std::max(16, cpuGetCycles(VU_MTVU_BUSY)));
 		CPU_SET_DMASTALL(DMAC_MFIFO_VIF, true);
+#if C71_MFIFO_STATS
+		c71_counts[C71_RET_WAITFORVU]++;
+#endif
 		return;
 	}
 
@@ -329,6 +376,9 @@ void vifMFIFOInterrupt()
 				vif1Regs.stat.VPS = VPS_DECODING; //If there's more data you need to say it's decoding the next VIF CMD (Onimusha - Blade Warriors)
 				VIF_LOG("VIF1 MFIFO Stalled");
 				CPU_SET_DMASTALL(DMAC_MFIFO_VIF, true);
+#if C71_MFIFO_STATS
+				c71_counts[C71_RET_IRQ_STALL]++;
+#endif
 				return;
 			}
 		}
@@ -349,6 +399,9 @@ void vifMFIFOInterrupt()
 	{
 		FireMFIFOEmpty();
 		CPU_SET_DMASTALL(DMAC_MFIFO_VIF, true);
+#if C71_MFIFO_STATS
+		c71_counts[C71_RET_EMPTY]++;
+#endif
 		return;
 	}
 
@@ -356,6 +409,9 @@ void vifMFIFOInterrupt()
 
 	if (!vif1.done || vif1ch.qwc)
 	{
+#if C71_MFIFO_STATS
+		c71_counts[C71_RET_TRANSFER]++;
+#endif
 		switch (vif1.inprogress & 1)
 		{
 			case 0: //Set up transfer
@@ -397,6 +453,9 @@ void vifMFIFOInterrupt()
 	g_vif1Cycles = 0;
 	vif1Regs.stat.FQC = std::min((u32)0x10, vif1ch.qwc);
 	vif1ch.chcr.STR = false;
+#if C71_MFIFO_STATS
+	c71_counts[C71_RET_FINISH]++;
+#endif
 	hwDmacIrq(DMAC_VIF1);
 	DMA_LOG("VIF1 MFIFO DMA End");
 	CPU_SET_DMASTALL(DMAC_MFIFO_VIF, false);
