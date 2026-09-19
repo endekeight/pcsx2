@@ -30,6 +30,10 @@
 
 #include "fmt/format.h"
 
+#if C71_MFIFO_STATS
+#include <cstdio>
+#endif
+
 using namespace R5900;	// for R5900 disasm tools
 
 s32 EEsCycle;		// used to sync the IOP to the EE
@@ -37,6 +41,41 @@ u64 EEoCycle;
 
 bool C18_EXEC_WEIGHT = false;
 u64 c18_counts[C18_COUNT_MAX] = {};
+
+#if C71_MFIFO_STATS
+u64 c71_counts[C71_COUNT_MAX] = {};
+u64 c71_vifcode_starts[128] = {};
+u64 c71_qwc_hist[C71_QWC_BUCKETS] = {};
+u64 c71_cur_qwc = 0;
+
+void c71_interrupt_end()
+{
+	c71_counts[C71_QWC_SUM] += c71_cur_qwc;
+	if (c71_cur_qwc > c71_counts[C71_QWC_MAX])
+		c71_counts[C71_QWC_MAX] = c71_cur_qwc;
+
+	size_t bucket = 9;
+	if (c71_cur_qwc == 0)
+		bucket = 0;
+	else if (c71_cur_qwc == 1)
+		bucket = 1;
+	else if (c71_cur_qwc < 4)
+		bucket = 2;
+	else if (c71_cur_qwc < 8)
+		bucket = 3;
+	else if (c71_cur_qwc < 16)
+		bucket = 4;
+	else if (c71_cur_qwc < 32)
+		bucket = 5;
+	else if (c71_cur_qwc < 64)
+		bucket = 6;
+	else if (c71_cur_qwc < 128)
+		bucket = 7;
+	else if (c71_cur_qwc < 256)
+		bucket = 8;
+	c71_qwc_hist[bucket]++;
+}
+#endif
 
 alignas(16) cpuRegistersPack _cpuRegistersPack;
 alignas(16) tlbs tlb[48];
@@ -424,6 +463,94 @@ __fi void _cpuEventTest_Shared()
 				last_counts[i] = c18_counts[i];
 		}
 	}
+
+#if C71_MFIFO_STATS
+	{
+		static u64 next = 0;
+		static u64 last = 0;
+		static u64 last_counts[C71_COUNT_MAX] = {};
+		static u64 last_qwc_hist[C71_QWC_BUCKETS] = {};
+		static u64 last_vifcode[128] = {};
+
+		if (next == 0 || cpuRegs.cycle < last)
+		{
+			last = cpuRegs.cycle;
+			next = cpuRegs.cycle + PS2CLK;
+			for (size_t i = 0; i < C71_COUNT_MAX; ++i)
+				last_counts[i] = c71_counts[i];
+			for (size_t i = 0; i < C71_QWC_BUCKETS; ++i)
+				last_qwc_hist[i] = c71_qwc_hist[i];
+			for (size_t i = 0; i < 128; ++i)
+				last_vifcode[i] = c71_vifcode_starts[i];
+			c71_counts[C71_QWC_MAX] = 0;
+		}
+		else if (cpuRegs.cycle >= next)
+		{
+			const u64 elapsed = cpuRegs.cycle - last;
+			Console.WriteLn(
+				"C71MFIFO: cycles=%llu entries=%llu not_mfd=%llu direct=%llu ret_path2=%llu ret_waitforvu=%llu ret_irq_stall=%llu ret_empty=%llu ret_transfer=%llu ret_finish=%llu tag_reads=%llu empty_before_tag=%llu empty_before_xfer=%llu rb_transfers=%llu rb_wraps=%llu nonmfifo_xfers=%llu qwc_sum=%llu qwc_max=%llu hwmfifo_writes=%llu hwmfifo_qwc=%llu vif1transfer_calls=%llu vif1transfer_words=%llu vifcode_calls=%llu",
+				static_cast<unsigned long long>(elapsed),
+				static_cast<unsigned long long>(c71_counts[C71_INT_ENTRIES] - last_counts[C71_INT_ENTRIES]),
+				static_cast<unsigned long long>(c71_counts[C71_INT_NOT_MFD] - last_counts[C71_INT_NOT_MFD]),
+				static_cast<unsigned long long>(c71_counts[C71_INT_DIRECT] - last_counts[C71_INT_DIRECT]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_PATH2] - last_counts[C71_RET_PATH2]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_WAITFORVU] - last_counts[C71_RET_WAITFORVU]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_IRQ_STALL] - last_counts[C71_RET_IRQ_STALL]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_EMPTY] - last_counts[C71_RET_EMPTY]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_TRANSFER] - last_counts[C71_RET_TRANSFER]),
+				static_cast<unsigned long long>(c71_counts[C71_RET_FINISH] - last_counts[C71_RET_FINISH]),
+				static_cast<unsigned long long>(c71_counts[C71_TAG_READS] - last_counts[C71_TAG_READS]),
+				static_cast<unsigned long long>(c71_counts[C71_EMPTY_BEFORE_TAG] - last_counts[C71_EMPTY_BEFORE_TAG]),
+				static_cast<unsigned long long>(c71_counts[C71_EMPTY_BEFORE_XFER] - last_counts[C71_EMPTY_BEFORE_XFER]),
+				static_cast<unsigned long long>(c71_counts[C71_RB_TRANSFERS] - last_counts[C71_RB_TRANSFERS]),
+				static_cast<unsigned long long>(c71_counts[C71_RB_WRAPS] - last_counts[C71_RB_WRAPS]),
+				static_cast<unsigned long long>(c71_counts[C71_NONMFIFO_XFERS] - last_counts[C71_NONMFIFO_XFERS]),
+				static_cast<unsigned long long>(c71_counts[C71_QWC_SUM] - last_counts[C71_QWC_SUM]),
+				static_cast<unsigned long long>(c71_counts[C71_QWC_MAX]),
+				static_cast<unsigned long long>(c71_counts[C71_HWMFIFO_WRITES] - last_counts[C71_HWMFIFO_WRITES]),
+				static_cast<unsigned long long>(c71_counts[C71_HWMFIFO_QWC] - last_counts[C71_HWMFIFO_QWC]),
+				static_cast<unsigned long long>(c71_counts[C71_VIF1_TRANSFER_CALLS] - last_counts[C71_VIF1_TRANSFER_CALLS]),
+				static_cast<unsigned long long>(c71_counts[C71_VIF1_TRANSFER_WORDS] - last_counts[C71_VIF1_TRANSFER_WORDS]),
+				static_cast<unsigned long long>(c71_counts[C71_VIFCODE_CALLS] - last_counts[C71_VIFCODE_CALLS]));
+
+			Console.WriteLn("C71QWCHIST: b0=%llu b1=%llu b2=%llu b3=%llu b4=%llu b5=%llu b6=%llu b7=%llu b8=%llu b9=%llu",
+				static_cast<unsigned long long>(c71_qwc_hist[0] - last_qwc_hist[0]),
+				static_cast<unsigned long long>(c71_qwc_hist[1] - last_qwc_hist[1]),
+				static_cast<unsigned long long>(c71_qwc_hist[2] - last_qwc_hist[2]),
+				static_cast<unsigned long long>(c71_qwc_hist[3] - last_qwc_hist[3]),
+				static_cast<unsigned long long>(c71_qwc_hist[4] - last_qwc_hist[4]),
+				static_cast<unsigned long long>(c71_qwc_hist[5] - last_qwc_hist[5]),
+				static_cast<unsigned long long>(c71_qwc_hist[6] - last_qwc_hist[6]),
+				static_cast<unsigned long long>(c71_qwc_hist[7] - last_qwc_hist[7]),
+				static_cast<unsigned long long>(c71_qwc_hist[8] - last_qwc_hist[8]),
+				static_cast<unsigned long long>(c71_qwc_hist[9] - last_qwc_hist[9]));
+
+			char buf[16 + 128 * 32];
+			int pos = snprintf(buf, sizeof(buf), "C71VIFCODE:");
+			for (int cmd = 0; cmd < 128; ++cmd)
+			{
+				const u64 d = c71_vifcode_starts[cmd] - last_vifcode[cmd];
+				if (d != 0)
+				{
+					if (pos < 0 || (size_t)pos >= sizeof(buf) - 1)
+						break;
+					pos += snprintf(buf + pos, sizeof(buf) - static_cast<size_t>(pos), " 0x%02x=%llu", cmd, static_cast<unsigned long long>(d));
+				}
+			}
+			Console.WriteLn("%s", buf);
+
+			last = cpuRegs.cycle;
+			next = cpuRegs.cycle + PS2CLK;
+			for (size_t i = 0; i < C71_COUNT_MAX; ++i)
+				last_counts[i] = c71_counts[i];
+			for (size_t i = 0; i < C71_QWC_BUCKETS; ++i)
+				last_qwc_hist[i] = c71_qwc_hist[i];
+			for (size_t i = 0; i < 128; ++i)
+				last_vifcode[i] = c71_vifcode_starts[i];
+			c71_counts[C71_QWC_MAX] = 0;
+		}
+	}
+#endif
 
 	eeEventTestIsActive = true;
 	cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;

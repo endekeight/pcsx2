@@ -35,6 +35,45 @@ enum C18Slot : size_t {
 // MixVoice occupancy (total vs audible). Measured at 10.88% fps when enabled; leave at 0.
 #define C47_VOICE_STATS 0
 
+// C71 VIF1 MFIFO census (interrupt cadence, QWC per interrupt, VIFcode mix). Leave at 0.
+#define C71_MFIFO_STATS 0
+
+#if C71_MFIFO_STATS
+enum C71Slot : size_t
+{
+	C71_INT_ENTRIES = 0,
+	C71_INT_NOT_MFD,
+	C71_INT_DIRECT,
+	C71_RET_PATH2,
+	C71_RET_WAITFORVU,
+	C71_RET_IRQ_STALL,
+	C71_RET_EMPTY,
+	C71_RET_TRANSFER,
+	C71_RET_FINISH,
+	C71_TAG_READS,
+	C71_EMPTY_BEFORE_TAG,
+	C71_EMPTY_BEFORE_XFER,
+	C71_RB_TRANSFERS,
+	C71_RB_WRAPS,
+	C71_NONMFIFO_XFERS,
+	C71_QWC_SUM,
+	C71_QWC_MAX,
+	C71_HWMFIFO_WRITES,
+	C71_HWMFIFO_QWC,
+	C71_VIF1_TRANSFER_CALLS,
+	C71_VIF1_TRANSFER_WORDS,
+	C71_VIFCODE_CALLS,
+	C71_COUNT_MAX,
+};
+
+constexpr size_t C71_QWC_BUCKETS = 10;
+extern u64 c71_counts[C71_COUNT_MAX];
+extern u64 c71_vifcode_starts[128];
+extern u64 c71_qwc_hist[C71_QWC_BUCKETS];
+extern u64 c71_cur_qwc;
+void c71_interrupt_end();
+#endif
+
 extern bool C18_EXEC_WEIGHT;
 extern u64 c18_counts[C18_COUNT_MAX];
 
