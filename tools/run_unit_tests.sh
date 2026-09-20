@@ -113,6 +113,17 @@ clang++ -std=c++20 $ARCH_FLAGS \
 # 2. Build core patch_test
 echo ""
 echo "[2/2] Compiling and running core patch_tests [$TARGET_ARCH]..."
+# Compile the unmapped-physical handlers with PCSX2_DEBUG and PCSX2_DEVBUILD so
+# pxFail is live (Assertions.h). Without those macros the old aborting handlers
+# would compile to a no-op and this harness would not pin the regression.
+clang++ -std=c++20 $ARCH_FLAGS -c -DPCSX2_DEBUG -DPCSX2_DEVBUILD \
+  -I"$DIR" \
+  -I"$DIR/common" \
+  -I"$DIR/pcsx2" \
+  -I"$DIR/3rdparty/include" \
+  -I"$DIR/3rdparty/fmt/include" \
+  "$DIR/pcsx2/vtlbUnmappedPhy.cpp" \
+  -o "$BUILD_DIR/vtlbUnmappedPhy.o"
 clang++ -std=c++20 $ARCH_FLAGS \
   -I"$DIR" \
   -I"$DIR/common" \
@@ -149,7 +160,9 @@ clang++ -std=c++20 $ARCH_FLAGS \
   "$DIR/tests/ctest/TestStubs.cpp" \
   "$DIR/tests/ctest/core/StubHost.cpp" \
   "$DIR/pcsx2/Patch.cpp" \
+  "$BUILD_DIR/vtlbUnmappedPhy.o" \
   "$DIR/tests/ctest/core/patch_tests.cpp" \
+  "$DIR/tests/ctest/core/vtlb_unmapped_phy_tests.cpp" \
   -framework Foundation -framework Cocoa -framework IOKit \
   -o "$BUILD_DIR/core_test"
 
