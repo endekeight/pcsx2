@@ -133,6 +133,7 @@ set(pcsx2Sources
 	Vif_Unpack.cpp
 	VMManager.cpp
 	vtlb.cpp
+	vtlbUnmappedPhy.cpp
 	VU0.cpp
 	VUmicro.cpp
 	VU0micro.cpp

@@ -18,6 +18,7 @@
 
 #include "Common.h"
 #include "vtlb.h"
+#include "vtlbUnmappedPhy.h"
 #include "COP0.h"
 #include "Cache.h"
 #include "IopMem.h"
@@ -608,68 +609,6 @@ static void vtlbUnmappedPWriteSm(u32 addr, OperandType data) {
 static void TAKES_R128 vtlbUnmappedPWriteLg(u32 addr, r128 data) { vtlb_BusError(addr, 1); if (!CHECK_EEREC && CHECK_CACHE && CheckCache(addr)) { writeCache128(addr, reinterpret_cast<mem128_t*>(&data) /*Safe??*/, false); }}
 // clang-format on
 
-// --------------------------------------------------------------------------------------
-//  VTLB mapping errors
-// --------------------------------------------------------------------------------------
-// These errors are assertion/logic errors that should never occur if PCSX2 has been initialized
-// properly.  All addressable physical memory should be configured as TLBMiss or Bus Error.
-//
-
-static mem8_t vtlbDefaultPhyRead8(u32 addr)
-{
-	pxFail(fmt::format("(VTLB) Attempted read8 from unmapped physical address @ 0x{:08X}.", addr).c_str());
-	return 0;
-}
-
-static mem16_t vtlbDefaultPhyRead16(u32 addr)
-{
-	pxFail(fmt::format("(VTLB) Attempted read16 from unmapped physical address @ 0x{:08X}.", addr).c_str());
-	return 0;
-}
-
-static mem32_t vtlbDefaultPhyRead32(u32 addr)
-{
-	pxFail(fmt::format("(VTLB) Attempted read32 from unmapped physical address @ 0x{:08X}.", addr).c_str());
-	return 0;
-}
-
-static mem64_t vtlbDefaultPhyRead64(u32 addr)
-{
-	pxFail(fmt::format("(VTLB) Attempted read64 from unmapped physical address @ 0x{:08X}.", addr).c_str());
-	return 0;
-}
-
-static RETURNS_R128 vtlbDefaultPhyRead128(u32 addr)
-{
-	pxFail(fmt::format("(VTLB) Attempted read128 from unmapped physical address @ 0x{:08X}.", addr).c_str());
-	return r128_zero();
-}
-
-static void vtlbDefaultPhyWrite8(u32 addr, mem8_t data)
-{
-	pxFail(fmt::format("(VTLB) Attempted write8 to unmapped physical address @ 0x{:08X}.", addr).c_str());
-}
-
-static void vtlbDefaultPhyWrite16(u32 addr, mem16_t data)
-{
-	pxFail(fmt::format("(VTLB) Attempted write16 to unmapped physical address @ 0x{:08X}.", addr).c_str());
-}
-
-static void vtlbDefaultPhyWrite32(u32 addr, mem32_t data)
-{
-	pxFail(fmt::format("(VTLB) Attempted write32 to unmapped physical address @ 0x{:08X}.", addr).c_str());
-}
-
-static void vtlbDefaultPhyWrite64(u32 addr, mem64_t data)
-{
-	pxFail(fmt::format("(VTLB) Attempted write64 to unmapped physical address @ 0x{:08X}.", addr).c_str());
-}
-
-static void TAKES_R128 vtlbDefaultPhyWrite128(u32 addr, r128 data)
-{
-	pxFail(fmt::format("(VTLB) Attempted write128 to unmapped physical address @ 0x{:08X}.", addr).c_str());
-}
-
 // ===========================================================================================
 //  VTLB Public API -- Init/Term/RegisterHandler stuff
 // ===========================================================================================
@@ -677,8 +616,8 @@ static void TAKES_R128 vtlbDefaultPhyWrite128(u32 addr, r128 data)
 
 // Assigns or re-assigns the callbacks for a VTLB memory handler.  The handler defines specific behavior
 // for how memory pages bound to the handler are read from / written to.  If any of the handler pointers
-// are NULL, the memory operations will be mapped to the BusError handler (thus generating BusError
-// exceptions if the emulated app attempts to access them).
+// are NULL, the memory operations are filled with the default physical handlers (read returns zero,
+// write is discarded). They do not raise a BusError.
 //
 // Note: All handlers persist across calls to vtlb_Reset(), but are wiped/invalidated by calls to vtlb_Init()
 //
@@ -709,8 +648,8 @@ vtlbHandler vtlb_NewHandler()
 
 // Registers a handler into the VTLB's internal handler array.  The handler defines specific behavior
 // for how memory pages bound to the handler are read from / written to.  If any of the handler pointers
-// are NULL, the memory operations will be mapped to the BusError handler (thus generating BusError
-// exceptions if the emulated app attempts to access them).
+// are NULL, the memory operations are filled with the default physical handlers (read returns zero,
+// write is discarded). They do not raise a BusError.
 //
 // Note: All handlers persist across calls to vtlb_Reset(), but are wiped/invalidated by calls to vtlb_Init()
 //
@@ -1236,10 +1175,16 @@ void vtlb_VMapUnmap(u32 vaddr, u32 size)
 }
 
 // vtlb_Init -- Clears vtlb handlers and memory mappings.
+// Note: All handlers persist across calls to vtlb_Reset(), but are wiped/invalidated by calls to vtlb_Init()
 void vtlb_Init()
 {
 	vtlbHandlerCount = 0;
 	std::memset(vtlbdata.RWFT, 0, sizeof(vtlbdata.RWFT));
+
+	// The unmapped-address log is not a handler. memReset remakes the map
+	// through this function, not vtlb_Reset (that call is commented out),
+	// so a second boot in one process must forget remembered addresses here.
+	vtlbResetUnmappedPhysicalLog();
 
 #define VTLB_BuildUnmappedHandler(baseName) \
 	baseName##ReadSm<mem8_t>, baseName##ReadSm<mem16_t>, baseName##ReadSm<mem32_t>, \
@@ -1279,6 +1224,8 @@ void vtlb_Reset()
 	vtlb_RemoveFastmemMappings();
 	for (int i = 0; i < 48; i++)
 		UnmapTLB(tlb[i], i);
+	// A second boot in one process should log the same unmapped probes again.
+	vtlbResetUnmappedPhysicalLog();
 }
 
 void vtlb_Shutdown()
