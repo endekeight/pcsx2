@@ -16,7 +16,7 @@
 #include <span>
 
 #ifndef GS_DUAL_SOURCE_FALLBACK
-#define GS_DUAL_SOURCE_FALLBACK 0
+#define GS_DUAL_SOURCE_FALLBACK 1
 #endif
 
 enum class Filter
