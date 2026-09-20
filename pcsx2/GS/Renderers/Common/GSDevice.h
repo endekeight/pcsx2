@@ -15,6 +15,10 @@
 #include <array>
 #include <span>
 
+#ifndef GS_DUAL_SOURCE_FALLBACK
+#define GS_DUAL_SOURCE_FALLBACK 1
+#endif
+
 enum class Filter
 {
 	Nearest = 0,
@@ -1401,6 +1405,9 @@ public:
 		bool depth_feedback       : 1; ///< Depth feedback loops can be done with DS directly (otherwise need to copy to separate RT).  Implies `feedback_loops`.
 		bool aa1                  : 1; ///< Supports the GS AA1 feature.
 		bool rov                  : 1; ///< Supports rasterizer ordered views for both depth and color.
+		// Last on purpose: inserting a bitfield above shifts every following field's bit
+		// offset, which changes code generation in every translation unit that reads them.
+		bool dual_source_blend    : 1; ///< Supports dual-source blending, i.e. a second shader colour output the blend unit can read.
 		FeatureSupport()
 		{
 			memset(this, 0, sizeof(*this));
@@ -1716,6 +1723,25 @@ public:
 	__fi static constexpr bool IsDualSourceBlendFactor(u8 factor)
 	{
 		return (factor == SRC1_ALPHA || factor == INV_SRC1_ALPHA || factor == SRC1_COLOR || factor == INV_SRC1_COLOR);
+	}
+
+	/// True when this blend configuration would read the shader's second colour output.
+	__fi static constexpr bool BlendUsesDualSource(u8 src_factor, u8 dst_factor, u8 src_factor_alpha, u8 dst_factor_alpha)
+	{
+		return IsDualSourceBlendFactor(src_factor) || IsDualSourceBlendFactor(dst_factor) ||
+		       IsDualSourceBlendFactor(src_factor_alpha) || IsDualSourceBlendFactor(dst_factor_alpha);
+	}
+
+	/// The nearest defined replacement for a dual-source factor on a device without dual-source
+	/// blending. SRC1_COLOR/SRC1_ALPHA become SRC_ALPHA, and their inverses INV_SRC_ALPHA; any
+	/// other factor is returned unchanged. It is wrong in a known way, and never undefined.
+	__fi static constexpr u8 ApproximateWithoutDualSource(u8 factor)
+	{
+		if (factor == SRC1_COLOR || factor == SRC1_ALPHA)
+			return SRC_ALPHA;
+		if (factor == INV_SRC1_COLOR || factor == INV_SRC1_ALPHA)
+			return INV_SRC_ALPHA;
+		return factor;
 	}
 	__fi static constexpr bool IsConstantBlendFactor(u16 factor)
 	{

@@ -837,6 +837,11 @@ bool GSDeviceOGL::CheckFeatures()
 	m_features.broken_point_sampler = false;
 	m_features.primitive_id = true;
 
+	// Behind the flag so that a flag-off build is byte-identical to the build
+	// before this capability existed; nothing reads the field when it is 0.
+	#if GS_DUAL_SOURCE_FALLBACK
+	m_features.dual_source_blend = GLAD_GL_VERSION_3_3 || GLAD_GL_ARB_blend_func_extended || GLAD_GL_EXT_blend_func_extended;
+	#endif
 	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch;
 	if (m_features.framebuffer_fetch && GSConfig.DisableFramebufferFetch)
 	{

@@ -1063,6 +1063,11 @@ bool GSDeviceMTL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	m_features.dxt_textures = true;
 	m_features.bptc_textures = true;
 	m_features.framebuffer_fetch = m_dev.features.framebuffer_fetch && !GSConfig.DisableFramebufferFetch;
+	// Behind the flag so that a flag-off build is byte-identical to the build
+	// before this capability existed; nothing reads the field when it is 0.
+	#if GS_DUAL_SOURCE_FALLBACK
+	m_features.dual_source_blend = true;
+	#endif
 	m_features.stencil_buffer = true;
 	m_features.cas_sharpening = true;
 	m_features.test_and_sample_depth = true;
