@@ -92,13 +92,15 @@ cmake   -DUSE_OPENGL=1 \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DUSE_BACKTRACE=0 \
-        `# Debug stays: PCSX2_DEVBUILD and _DEBUG come from $<$<CONFIG:Debug>:...>` \
-        `# and AndroidSX2 builds Debug too. Those macros change class layout -` \
-        `# GSTexture gains a member and a virtual under PCSX2_DEVBUILD - so the` \
-        `# two sides must agree. Optimise through the flags instead.` \
-        -DCMAKE_BUILD_TYPE=Debug \
-        -DCMAKE_C_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
-        -DCMAKE_CXX_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
+        `# RelWithDebInfo, not Debug: the shipping build compiles PCSX2's debug` \
+        `# assertions out (A15). PCSX2_DEVBUILD, PCSX2_DEBUG and _DEBUG come only` \
+        `# from $<$<CONFIG:Debug>:...> and change class layout - GSTexture gains a` \
+        `# member and a virtual under PCSX2_DEVBUILD - so AndroidSX2 and yaapsecore` \
+        `# must build RelWithDebInfo too. The flags repeat what Debug produced, with` \
+        `# no -DNDEBUG; VIXL_DEBUG is passed here because vixl sets it only for Debug.` \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_C_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing" \
+        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DVIXL_DEBUG" \
         -DQT_BUILD=OFF \
         -DCMAKE_PREFIX_PATH="$DIR/$DEPS" \
         -DCMAKE_TOOLCHAIN_FILE=$NDK_TOOLCHAIN_PATH \
