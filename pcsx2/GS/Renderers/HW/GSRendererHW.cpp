@@ -22,12 +22,12 @@ namespace
 {
 	struct DrawKindStats
 	{
-		u32 draws = 0, tme = 0, notme = 0, process_texture = 0;
-		u32 src_null = 0, src_from_target = 0, src_from_memory = 0;
-		u32 sw_prim = 0, empty_rect = 0;
-		u32 primclass[4] = {};
-		u32 tfx[4] = {};
-		u32 psm[64] = {};
+		u64 draws = 0, tme = 0, notme = 0, process_texture = 0;
+		u64 src_null = 0, src_from_target = 0, src_from_memory = 0;
+		u64 sw_prim = 0, empty_rect = 0;
+		u64 primclass[8] = {}; // indexed by GS_PRIM_CLASS; GS_INVALID_CLASS is 7
+		u64 tfx[4] = {};
+		u64 psm[64] = {};
 		u32 presents = 0;
 	};
 	DrawKindStats s_draw_kind;
@@ -133,11 +133,11 @@ void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 				psm += fmt::format("0x{:02X}:{}", i, s_draw_kind.psm[i]);
 			}
 		}
-		Console.WriteLnFmt("GSDRAWKIND: presents=120 draws={} tme={} notme={} proc={} src_mem={} src_rt={} src_null={} sw={} empty={} prim=[{},{},{},{}] tfx=[{},{},{},{}] psm={{{}}}",
+		Console.WriteLnFmt("GSDRAWKIND: presents=120 draws={} tme={} notme={} proc={} src_mem={} src_rt={} src_null={} sw={} empty={} prim=[{},{},{},{},{}] tfx=[{},{},{},{}] psm={{{}}}",
 			s_draw_kind.draws, s_draw_kind.tme, s_draw_kind.notme, s_draw_kind.process_texture,
 			s_draw_kind.src_from_memory, s_draw_kind.src_from_target, s_draw_kind.src_null,
 			s_draw_kind.sw_prim, s_draw_kind.empty_rect,
-			s_draw_kind.primclass[0], s_draw_kind.primclass[1], s_draw_kind.primclass[2], s_draw_kind.primclass[3],
+			s_draw_kind.primclass[0], s_draw_kind.primclass[1], s_draw_kind.primclass[2], s_draw_kind.primclass[3], s_draw_kind.primclass[7],
 			s_draw_kind.tfx[0], s_draw_kind.tfx[1], s_draw_kind.tfx[2], s_draw_kind.tfx[3],
 			psm);
 		s_draw_kind = DrawKindStats{};
@@ -3095,7 +3095,7 @@ void GSRendererHW::Draw()
 
 	const bool draw_sprite_tex = PRIM->TME && (m_vt.m_primclass == GS_SPRITE_CLASS);
 #if GS_DRAW_KIND_STATS
-	s_draw_kind.primclass[m_vt.m_primclass & 3]++;
+	s_draw_kind.primclass[m_vt.m_primclass & 7]++;
 #endif
 
 	// GS doesn't fill the right or bottom edges of sprites/triangles, and for a pixel to be shaded, the vertex
