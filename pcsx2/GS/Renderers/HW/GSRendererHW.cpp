@@ -12,6 +12,28 @@
 #include "common/StringUtil.h"
 #include <bit>
 
+// A17. Per-present histogram of what the hardware renderer's Draw() receives: textured
+// against untextured draws, where the texture came from, and the TEX0 formats. Ships 0.
+#ifndef GS_DRAW_KIND_STATS
+#define GS_DRAW_KIND_STATS 0
+#endif
+#if GS_DRAW_KIND_STATS
+namespace
+{
+	struct DrawKindStats
+	{
+		u64 draws = 0, tme = 0, notme = 0, process_texture = 0;
+		u64 src_null = 0, src_from_target = 0, src_from_memory = 0;
+		u64 sw_prim = 0, empty_rect = 0;
+		u64 primclass[8] = {}; // indexed by GS_PRIM_CLASS; GS_INVALID_CLASS is 7
+		u64 tfx[4] = {};
+		u64 psm[64] = {};
+		u32 presents = 0;
+	};
+	DrawKindStats s_draw_kind;
+}
+#endif
+
 using PS_ATST  = GSShader::PS_ATST;
 using PS_AFAIL = GSShader::PS_AFAIL;
 
@@ -97,6 +119,30 @@ void GSRendererHW::UpdateSettings(const Pcsx2Config::GSOptions& old_config)
 
 void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 {
+#if GS_DRAW_KIND_STATS
+	s_draw_kind.presents++;
+	if (s_draw_kind.presents >= 120)
+	{
+		std::string psm;
+		for (u32 i = 0; i < 64; i++)
+		{
+			if (s_draw_kind.psm[i] != 0)
+			{
+				if (!psm.empty())
+					psm += ",";
+				psm += fmt::format("0x{:02X}:{}", i, s_draw_kind.psm[i]);
+			}
+		}
+		Console.WriteLnFmt("GSDRAWKIND: presents=120 draws={} tme={} notme={} proc={} src_mem={} src_rt={} src_null={} sw={} empty={} prim=[{},{},{},{},{}] tfx=[{},{},{},{}] psm={{{}}}",
+			s_draw_kind.draws, s_draw_kind.tme, s_draw_kind.notme, s_draw_kind.process_texture,
+			s_draw_kind.src_from_memory, s_draw_kind.src_from_target, s_draw_kind.src_null,
+			s_draw_kind.sw_prim, s_draw_kind.empty_rect,
+			s_draw_kind.primclass[0], s_draw_kind.primclass[1], s_draw_kind.primclass[2], s_draw_kind.primclass[3], s_draw_kind.primclass[7],
+			s_draw_kind.tfx[0], s_draw_kind.tfx[1], s_draw_kind.tfx[2], s_draw_kind.tfx[3],
+			psm);
+		s_draw_kind = DrawKindStats{};
+	}
+#endif
 	if (GSConfig.LoadTextureReplacements)
 		GSTextureReplacements::ProcessAsyncLoadedTextures();
 
@@ -2770,6 +2816,19 @@ void GSRendererHW::Draw()
 	m_cached_ctx.FRAME = context->FRAME;
 	m_cached_ctx.ZBUF = context->ZBUF;
 
+#if GS_DRAW_KIND_STATS
+	s_draw_kind.draws++;
+	if (PRIM->TME)
+		s_draw_kind.tme++;
+	else
+		s_draw_kind.notme++;
+	if (PRIM->TME)
+	{
+		s_draw_kind.tfx[m_cached_ctx.TEX0.TFX & 3]++;
+		s_draw_kind.psm[m_cached_ctx.TEX0.PSM & 63]++;
+	}
+#endif
+
 	if (IsBadFrame())
 	{
 		GL_INS("HW: Warning skipping a draw call (%lld)", s_n);
@@ -3035,6 +3094,9 @@ void GSRendererHW::Draw()
 	}
 
 	const bool draw_sprite_tex = PRIM->TME && (m_vt.m_primclass == GS_SPRITE_CLASS);
+#if GS_DRAW_KIND_STATS
+	s_draw_kind.primclass[m_vt.m_primclass & 7]++;
+#endif
 
 	// GS doesn't fill the right or bottom edges of sprites/triangles, and for a pixel to be shaded, the vertex
 	// must cross the center. In other words, the range is equal to the floor of coordinates +0.5. Except for
@@ -3060,16 +3122,26 @@ void GSRendererHW::Draw()
 	if (m_r.rempty())
 	{
 		GL_INS("HW: Draw %lld skipped due to having an empty rect", s_n);
+#if GS_DRAW_KIND_STATS
+		s_draw_kind.empty_rect++;
+#endif
 		return;
 	}
 
 	m_process_texture = PRIM->TME && !(NeedsBlending() && m_context->ALPHA.IsBlack() && !m_cached_ctx.TEX0.TCC) && !(no_rt && (!m_cached_ctx.TEST.ATE || m_cached_ctx.TEST.ATST <= ATST_ALWAYS));
+#if GS_DRAW_KIND_STATS
+	if (m_process_texture)
+		s_draw_kind.process_texture++;
+#endif
 
 	// We trigger the sw prim render here super early, to avoid creating superfluous render targets.
 	if (CanUseSwPrimRender(no_rt, no_ds, draw_sprite_tex && m_process_texture) && SwPrimRender(*this, true, true))
 	{
 		GL_CACHE("HW: Possible texture decompression, drawn with SwPrimRender() (BP %x BW %u TBP0 %x TBW %u)",
 			m_cached_ctx.FRAME.Block(), m_cached_ctx.FRAME.FBMSK, m_cached_ctx.TEX0.TBP0, m_cached_ctx.TEX0.TBW);
+#if GS_DRAW_KIND_STATS
+		s_draw_kind.sw_prim++;
+#endif
 		return;
 	}
 
@@ -3111,6 +3183,9 @@ void GSRendererHW::Draw()
 			if (SwPrimRender(*this, true, true))
 			{
 				GL_CACHE("HW: Possible clut draw, drawn with SwPrimRender()");
+#if GS_DRAW_KIND_STATS
+				s_draw_kind.sw_prim++;
+#endif
 				return;
 			}
 		}
@@ -3542,6 +3617,14 @@ void GSRendererHW::Draw()
 			src = tex_psm.depth ? g_texture_cache->LookupDepthSource(true, TEX0, m_cached_ctx.TEXA, MIP_CLAMP, tmm.coverage, possible_shuffle, m_vt.IsLinear(), m_cached_ctx.FRAME, req_color, req_alpha)
 			                    : g_texture_cache->LookupSource(true, TEX0, m_cached_ctx.TEXA, MIP_CLAMP, tmm.coverage, (GSConfig.HWMipmap || GSConfig.TriFilter == TriFiltering::Forced) ? &hash_lod_range : nullptr,
 			                         possible_shuffle, m_vt.IsLinear(), m_cached_ctx.FRAME, req_color, req_alpha);
+#if GS_DRAW_KIND_STATS
+			if (!src)
+				s_draw_kind.src_null++;
+			else if (src->m_from_target)
+				s_draw_kind.src_from_target++;
+			else
+				s_draw_kind.src_from_memory++;
+#endif
 
 			if (!src) [[unlikely]]
 			{
