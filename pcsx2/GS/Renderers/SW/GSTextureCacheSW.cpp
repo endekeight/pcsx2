@@ -226,8 +226,8 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 	}
 
 	// TW/TH are 4-bit; mipmapping can leave them unclamped above 10. Reject sizes above 10
-	// and a pitch narrower than the width before m_complete is set so the hardware path
-	// (LookupSource) applies the same limit.
+	// and a pitch narrower than the width (see GSSwTextureGeometryValid) before anything is
+	// allocated or marked complete.
 	if (!GSSwTextureGeometryValid(m_TEX0.TW, m_TEX0.TH, m_tw))
 		return false;
 
