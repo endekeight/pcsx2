@@ -89,7 +89,11 @@ NDK_TOOLCHAIN_PATH=$ANDROID_SDK_PATH/ndk/$NDK/build/cmake/android.toolchain.cmak
 ASAN_ARGS=()
 if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
 	echo "YAAPSE_ASAN=1: building with -DUSE_ASAN=ON"
-	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared)
+	# Precompiled headers are off: with -fsanitize=address, NDK 28's clang
+	# rejects the PCH's va_list against libc++'s ("non-const lvalue reference
+	# to type '__builtin_va_list' cannot bind to a value of unrelated type
+	# 'va_list'"); the same file compiles without the PCH.
+	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON)
 fi
 
 # CMAKE_INSTALL_PREFIX is what places the headers, so it points at the header root.
