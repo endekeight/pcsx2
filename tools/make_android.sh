@@ -81,6 +81,17 @@ fi
 
 NDK_TOOLCHAIN_PATH=$ANDROID_SDK_PATH/ndk/$NDK/build/cmake/android.toolchain.cmake
 
+# Diagnostic only (A20): YAAPSE_ASAN=1 builds the archives with upstream's USE_ASAN
+# switch and a shared C++ runtime, as the NDK's ASan guide requires, and leaves a
+# USE_ASAN marker beside them. The frontend refuses to link an ASan archive set
+# without its own ASan build, or the reverse: a one-sided sanitizer build links and
+# corrupts memory silently. Unset, nothing below changes.
+ASAN_ARGS=()
+if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
+	echo "YAAPSE_ASAN=1: building with -DUSE_ASAN=ON"
+	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared)
+fi
+
 # CMAKE_INSTALL_PREFIX is what places the headers, so it points at the header root.
 INSTALLDIR=$YAAPSECORE_LIBS
 
@@ -110,6 +121,7 @@ cmake   -DUSE_OPENGL=1 \
         -DANDROID_PLATFORM=android-$ANDROID_SDK \
         -DANDROID_ABI=arm64-v8a \
         -DCMAKE_INSTALL_PREFIX="$INSTALLDIR" \
+        "${ASAN_ARGS[@]}" \
         -B $BUILD_DIR -G Ninja
 
 cmake --build $BUILD_DIR --parallel
@@ -140,6 +152,10 @@ cp -f $BUILD_DIR/3rdparty/libchdr/liblibchdr.a $LIBS_DIR/liblibchdr.a
 cp -f $BUILD_DIR/3rdparty/vixl/libvixl.a $LIBS_DIR/libvixl.a
 cp -f $BUILD_DIR/3rdparty/freesurround/libfreesurround.a $LIBS_DIR/libfreesurround.a
 cp -f $BUILD_DIR/3rdparty/demangler/libdemanglegnu.a $LIBS_DIR/libdemanglegnu.a
+
+if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
+	touch $LIBS_DIR/USE_ASAN
+fi
 
 # ======== Deps
 
