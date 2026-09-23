@@ -292,7 +292,11 @@ bool GSRendererHWFunctions::SwPrimRender(GSRendererHW& hw, bool invalidate_tc, b
 
 					GSVector4i r = hw.GetTextureMinMax(MIP_TEX0, MIP_CLAMP, gd.sel.ltf, true).coverage;
 					if (!hw.m_sw_texture[i]->Update(r))
+					{
+						vt.m_min.t = tmin;
+						vt.m_max.t = tmax;
 						return false;
+					}
 					gd.tex[i] = hw.m_sw_texture[i]->m_buff;
 				}
 

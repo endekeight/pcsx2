@@ -30,12 +30,15 @@ constexpr u32 GSTextureBlockIndex(u32 blkX, u32 blkY)
 	return ((blkY << 7) + blkX) % GS_MAX_BLOCKS;
 }
 
-// PS2 GS texture width/height are limited to 1024 texels (TW/TH <= 10).
-// Larger sizes are rejected before allocation, matching the hardware path in
-// GSTextureCache::LookupSource.
-constexpr bool GSTextureSizeValid(u32 tw_log2, u32 th_log2)
+// The PS2 GS limits TW and TH to 10 (1024 texels); the software texture cache
+// rejects larger sizes, like GSTextureCache::LookupSource does for the hardware
+// renderer, except that LookupSource still accepts them under a region clamp.
+// A row pitch (m_tw) narrower than the texture width happens when a base TW
+// above 10 is truncated by the 3-bit sel.tw that seeds the mipmap levels'
+// pitch, so the block loop would write past each row.
+constexpr bool GSSwTextureGeometryValid(u32 tw_log2, u32 th_log2, u32 pitch_log2)
 {
-	return tw_log2 <= 10 && th_log2 <= 10;
+	return tw_log2 <= 10 && th_log2 <= 10 && pitch_log2 >= tw_log2;
 }
 
 // Bytes needed for the SW texture buffer. Computed in size_t so large

@@ -193,10 +193,9 @@ void GSTextureCacheSW::Texture::Reset(u32 tw0, const GIFRegTEX0& TEX0, const GIF
 
 	// m_tw can grow while TW/TH stay equal (mip levels reset with the base pitch); free a kept
 	// buffer that is too small for the new geometry so Update does not write past it.
-	if (m_buff && GSTextureSizeValid(m_TEX0.TW, m_TEX0.TH))
+	if (m_buff && GSSwTextureGeometryValid(m_TEX0.TW, m_TEX0.TH, m_tw))
 	{
-		const size_t required = RequiredBufferSize();
-		if (required > m_buff_size)
+		if (RequiredBufferSize() > m_buff_size)
 		{
 			_aligned_free(m_buff);
 			m_buff = nullptr;
@@ -226,9 +225,10 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 		return true;
 	}
 
-	// TW/TH are 4-bit; mipmapping can leave them unclamped above 10. Reject before m_complete
-	// is set so the hardware path (LookupSource) applies the same limit.
-	if (!GSTextureSizeValid(m_TEX0.TW, m_TEX0.TH))
+	// TW/TH are 4-bit; mipmapping can leave them unclamped above 10. Reject sizes above 10
+	// and a pitch narrower than the width before m_complete is set so the hardware path
+	// (LookupSource) applies the same limit.
+	if (!GSSwTextureGeometryValid(m_TEX0.TW, m_TEX0.TH, m_tw))
 		return false;
 
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[m_TEX0.PSM];
@@ -244,11 +244,6 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 
 	r = r.ralign<Align_Outside>(bs);
 
-	if (r.eq(GSVector4i(0, 0, tw, th)))
-	{
-		m_complete = true; // lame, but better than nothing
-	}
-
 	if (!m_buff)
 	{
 		const size_t size = RequiredBufferSize();
@@ -262,6 +257,11 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 		// This _shouldn't_ be necessary, but apparently our texture min/max is wrong somewhere,
 		// and we end up sampling from "random" malloc memory, which breaks GS dump runs.
 		std::memset(m_buff, 0, size);
+	}
+
+	if (r.eq(GSVector4i(0, 0, tw, th)))
+	{
+		m_complete = true; // lame, but better than nothing
 	}
 
 	GSLocalMemory& mem = g_gs_renderer->m_mem;
