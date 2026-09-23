@@ -1,6 +1,7 @@
 add_pcsx2_test(core_test
 	patch_tests.cpp
 	vtlb_unmapped_phy_tests.cpp
+	GS/texture_block_index_tests.cpp
 	MockMemoryInterface.h
 	StubHost.cpp
 )
