@@ -3815,7 +3815,7 @@ void GSRendererHW::Draw()
 			// If it failed to check depth test earlier, we can now check the top bits from the alpha to get a bit more accurate picture.
 			if (((zm && m_cached_ctx.TEST.ZTST > ZTST_ALWAYS) || (m_vt.m_eq.z && m_cached_ctx.TEST.ZTST == ZTST_GEQUAL)) && GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].trbpp == 32)
 			{
-				if (ds->m_alpha_max != 0)
+				if (ds && ds->m_alpha_max != 0)
 				{
 					const u32 max_z = (static_cast<u64>(ds->m_alpha_max + 1) << 24) - 1;
 
