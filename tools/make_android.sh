@@ -98,9 +98,12 @@ cmake   -DUSE_OPENGL=1 \
         `# member and a virtual under PCSX2_DEVBUILD - so AndroidSX2 and yaapsecore` \
         `# must build RelWithDebInfo too. The flags repeat what Debug produced, with` \
         `# no -DNDEBUG; VIXL_DEBUG is passed here because vixl sets it only for Debug.` \
+        `# Debug keeps its -O2 flags for debugging builds.` \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_C_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing" \
         -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DVIXL_DEBUG" \
+        -DCMAKE_C_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
+        -DCMAKE_CXX_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DQT_BUILD=OFF \
         -DCMAKE_PREFIX_PATH="$DIR/$DEPS" \
         -DCMAKE_TOOLCHAIN_FILE=$NDK_TOOLCHAIN_PATH \
