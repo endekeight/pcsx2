@@ -262,7 +262,7 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 		{
 			for (; bn.blkX() < right; bn.nextBlockX())
 			{
-				int i = (bn.blkY() << 7) + bn.blkX();
+				const u32 i = GSTextureBlockIndex(bn.blkX(), bn.blkY());
 				u32 block = bn.value();
 
 				u32 row = i >> 5;

@@ -395,7 +395,7 @@ std::vector<GSVector2i>* GSLocalMemory::GetPage2TileMap(const GIFRegTEX0& TEX0)
 		{
 			u32 page = (bn.value() >> 5) % GS_MAX_PAGES;
 
-			tmp[page].insert((bn.blkY() << 7) + bn.blkX());
+			tmp[page].insert(GSTextureBlockIndex(bn.blkX(), bn.blkY()));
 		}
 	}
 

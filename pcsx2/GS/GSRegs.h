@@ -22,6 +22,14 @@ constexpr u32 GS_MAX_PAGES =  (VM_SIZE / GS_PAGE_SIZE);
 constexpr u32 GS_MAX_BLOCKS = (VM_SIZE / GS_BLOCK_SIZE);
 constexpr u32 GS_MAX_COLUMNS = (VM_SIZE / GS_COLUMN_SIZE);
 
+// Index of block (blkX, blkY) in a texture's valid-block bitmap of GS_MAX_PAGES words. Wrapped to
+// the size of GS memory as GSTextureCache::Source::Update does, so the row (index >> 5) stays below
+// GS_MAX_PAGES for textures 2048 texels wide or tall.
+constexpr u32 GSTextureBlockIndex(u32 blkX, u32 blkY)
+{
+	return ((blkY << 7) + blkX) % GS_MAX_BLOCKS;
+}
+
 #pragma pack(push, 1)
 
 enum GS_PRIM
