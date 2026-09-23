@@ -162,12 +162,21 @@ GSTextureCacheSW::Texture::~Texture()
 	}
 }
 
+size_t GSTextureCacheSW::Texture::RequiredBufferSize() const
+{
+	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[m_TEX0.PSM];
+	const u32 shift = psm.pal == 0 ? 2u : 0u;
+	const u32 th = static_cast<u32>(std::max<int>(1 << m_TEX0.TH, psm.bs.y));
+	return GSSwTextureBufferSize(m_tw, shift, th);
+}
+
 void GSTextureCacheSW::Texture::Reset(u32 tw0, const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA)
 {
 	if (m_buff && (m_TEX0.TW != TEX0.TW || m_TEX0.TH != TEX0.TH))
 	{
 		_aligned_free(m_buff);
 		m_buff = nullptr;
+		m_buff_size = 0;
 	}
 
 	m_tw = tw0;
@@ -180,6 +189,19 @@ void GSTextureCacheSW::Texture::Reset(u32 tw0, const GIFRegTEX0& TEX0, const GIF
 	if (m_tw == 0)
 	{
 		m_tw = std::max<int>(m_TEX0.TW, GSLocalMemory::m_psm[m_TEX0.PSM].pal == 0 ? 3 : 5); // makes one row 32 bytes at least, matches the smallest block size that is allocated for m_buff
+	}
+
+	// m_tw can grow while TW/TH stay equal (mip levels reset with the base pitch); free a kept
+	// buffer that is too small for the new geometry so Update does not write past it.
+	if (m_buff && GSTextureSizeValid(m_TEX0.TW, m_TEX0.TH))
+	{
+		const size_t required = RequiredBufferSize();
+		if (required > m_buff_size)
+		{
+			_aligned_free(m_buff);
+			m_buff = nullptr;
+			m_buff_size = 0;
+		}
 	}
 
 	memset(m_valid, 0, sizeof(m_valid));
@@ -204,6 +226,11 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 		return true;
 	}
 
+	// TW/TH are 4-bit; mipmapping can leave them unclamped above 10. Reject before m_complete
+	// is set so the hardware path (LookupSource) applies the same limit.
+	if (!GSTextureSizeValid(m_TEX0.TW, m_TEX0.TH))
+		return false;
+
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[m_TEX0.PSM];
 
 	GSVector2i bs = psm.bs;
@@ -224,12 +251,13 @@ bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)
 
 	if (!m_buff)
 	{
-		const u32 pitch = (1 << m_tw) << shift;
-		const size_t size = pitch * th * 4;
+		const size_t size = RequiredBufferSize();
 
 		m_buff = _aligned_malloc(size, VECTOR_ALIGNMENT);
 		if (!m_buff)
 			return false;
+
+		m_buff_size = size;
 
 		// This _shouldn't_ be necessary, but apparently our texture min/max is wrong somewhere,
 		// and we end up sampling from "random" malloc memory, which breaks GS dump runs.

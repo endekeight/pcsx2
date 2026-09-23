@@ -164,6 +164,7 @@ clang++ -std=c++20 $ARCH_FLAGS \
   "$DIR/tests/ctest/core/patch_tests.cpp" \
   "$DIR/tests/ctest/core/vtlb_unmapped_phy_tests.cpp" \
   "$DIR/tests/ctest/core/GS/texture_block_index_tests.cpp" \
+  "$DIR/tests/ctest/core/GS/sw_texture_buffer_tests.cpp" \
   -framework Foundation -framework Cocoa -framework IOKit \
   -o "$BUILD_DIR/core_test"
 

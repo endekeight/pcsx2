@@ -26,6 +26,7 @@ public:
 		u32 m_valid[GS_MAX_PAGES];
 		std::array<u16, GS_MAX_PAGES> m_erase_it;
 		const u32* RESTRICT m_sharedbits;
+		size_t m_buff_size = 0;
 
 		// m_valid
 		// fast mode: each u32 bits map to the 32 blocks of that page
@@ -38,6 +39,9 @@ public:
 
 		bool Update(const GSVector4i& r);
 		bool Save(const std::string& fn) const;
+
+	private:
+		size_t RequiredBufferSize() const;
 	};
 
 protected:
