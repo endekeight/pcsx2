@@ -195,7 +195,8 @@ bool GSRendererHWFunctions::SwPrimRender(GSRendererHW& hw, bool invalidate_tc, b
 			else
 				hw.m_sw_texture[0]->Reset(0, TEX0, env.TEXA);
 
-			hw.m_sw_texture[0]->Update(r);
+			if (!hw.m_sw_texture[0]->Update(r))
+				return false;
 			gd.tex[0] = hw.m_sw_texture[0]->m_buff;
 
 			gd.sel.tw = hw.m_sw_texture[0]->m_tw - 3;
@@ -290,7 +291,12 @@ bool GSRendererHWFunctions::SwPrimRender(GSRendererHW& hw, bool invalidate_tc, b
 						hw.m_sw_texture[i]->Reset(gd.sel.tw + 3, MIP_TEX0, env.TEXA);
 
 					GSVector4i r = hw.GetTextureMinMax(MIP_TEX0, MIP_CLAMP, gd.sel.ltf, true).coverage;
-					hw.m_sw_texture[i]->Update(r);
+					if (!hw.m_sw_texture[i]->Update(r))
+					{
+						vt.m_min.t = tmin;
+						vt.m_max.t = tmax;
+						return false;
+					}
 					gd.tex[i] = hw.m_sw_texture[i]->m_buff;
 				}
 
