@@ -358,7 +358,7 @@ void intDoBranch(u32 target);
 #define EE_DIFFERENTIAL_SHADOW 0
 
 #if EE_DIFFERENTIAL_SHADOW
-extern bool eeDifferentialShadowActive;
+extern thread_local bool eeDifferentialShadowActive;
 
 // An instruction fetch between these calls is a real read, neither served nor logged.
 void EeDifferentialBeginFetch();
