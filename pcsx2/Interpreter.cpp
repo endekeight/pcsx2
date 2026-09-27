@@ -28,6 +28,11 @@ void intEventTest();
 
 void intUpdateCPUCycles()
 {
+#if EE_DIFFERENTIAL_SHADOW
+	// The shadow re-runs a span that already ran; flushing cycles here would do it twice.
+	if (eeDifferentialShadowActive)
+		return;
+#endif
 	const bool lowcycles = (cpuBlockCycles <= 40);
 	const s8 cyclerate = EmuConfig.Speedhacks.EECycleRate;
 	u32 scale_cycles = 0;
@@ -174,7 +179,14 @@ static void execI()
 	cpuRegs.pc += 4;
 
 	// interprete instruction
+#if EE_DIFFERENTIAL_SHADOW
+	// The shadow re-runs a span that already ran; this fetch must be a real read, neither served nor logged.
+	EeDifferentialBeginFetch();
+#endif
 	cpuRegs.code = memRead32( pc );
+#if EE_DIFFERENTIAL_SHADOW
+	EeDifferentialEndFetch();
+#endif
 
 	const OPCODE& opcode = GetCurrentInstruction();
 #if 0
@@ -211,6 +223,10 @@ static void execI()
 #endif
 
 
+#if EE_DIFFERENTIAL_SHADOW
+	// The shadow re-runs a span that already ran; accumulating cycles here would do it twice.
+	if (!eeDifferentialShadowActive)
+#endif
 	cpuBlockCycles += opcode.cycles * (2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
 
 	opcode.interpret();
@@ -258,6 +274,10 @@ static __fi void _doBranch_shared(u32 tar)
 				}
 			}
 		}
+#if EE_DIFFERENTIAL_SHADOW
+		// The shadow re-runs a span that already ran; recording the target here would leak it into a later interpreter run.
+		if (!eeDifferentialShadowActive)
+#endif
 		intLastBranchTo = tar;
 		cpuRegs.pc = tar;
 		cpuRegs.branch = 0;
@@ -555,6 +575,11 @@ static void intReset()
 
 void intEventTest()
 {
+#if EE_DIFFERENTIAL_SHADOW
+	// The shadow re-runs a span that already ran; firing the event test here would do it twice.
+	if (eeDifferentialShadowActive)
+		return;
+#endif
 	// Perform counters, ints, and IOP updates:
 	_cpuEventTest_Shared();
 

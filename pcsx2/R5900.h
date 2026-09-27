@@ -350,6 +350,46 @@ void intSetBranch();
 // parts of the Recs (namely COP0's branch codes and stuff).
 void intDoBranch(u32 target);
 
+// D19 (docs/specs/2026-09-21-D19-ee-interpreter-differential.md). When 1, the interpreter
+// skips its event test and cycle flush while the differential's shadow pass re-runs an
+// already-executed span, its instruction fetch bypasses the shadow, and the vtlb read/write
+// functions serve or log accesses for the differential. Default 0: compiled out and
+// byte-identical to upstream.
+#define EE_DIFFERENTIAL_SHADOW 0
+
+#if EE_DIFFERENTIAL_SHADOW
+extern thread_local bool eeDifferentialShadowActive;
+
+// An instruction fetch between these calls is a real read, neither served nor logged.
+void EeDifferentialBeginFetch();
+void EeDifferentialEndFetch();
+
+// Width is in bytes: 1, 2, 4, 8 or 16. Returns true when the shadow pass served the read;
+// the caller must then return `value` without touching memory. Returns false when the
+// caller should perform the read normally.
+bool EeShadowServeRead(u32 address, u32 width, u128& value);
+
+// Records a shadow-pass write. The caller must not perform the write.
+void EeShadowRecordWrite(u32 address, u32 width, const u128& value);
+
+// Authority-side (compiled-block) load through the vtlb read functions.
+void EeAuthorityLogRead(u32 address, u32 width, const u128& value);
+
+// Authority-side store nesting. Only the outermost entry into vtlb_memWrite* is a guest store;
+// writes performed while servicing it (for example a DMA copy started by a hardware register
+// write) are not journalled. Returns true when the store was journalled.
+bool EeAuthorityEnterWrite(u32 address, u32 width, const u128& value);
+void EeAuthorityLeaveWrite();
+
+struct EeAuthorityWriteScope
+{
+	EeAuthorityWriteScope(u32 address, u32 width, const u128& value) { EeAuthorityEnterWrite(address, width, value); }
+	~EeAuthorityWriteScope() { EeAuthorityLeaveWrite(); }
+	EeAuthorityWriteScope(const EeAuthorityWriteScope&) = delete;
+	EeAuthorityWriteScope& operator=(const EeAuthorityWriteScope&) = delete;
+};
+#endif
+
 // modules loaded at hardcoded addresses by the kernel
 const u32 EEKERNEL_START	= 0;
 const u32 EENULL_START		= 0x81FC0;
