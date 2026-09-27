@@ -162,8 +162,13 @@ __inline int CheckCache(u32 addr)
 // --------------------------------------------------------------------------------------
 // See recVTLB.cpp for the dynarec versions.
 
+#if EE_DIFFERENTIAL_SHADOW
+template <typename DataType>
+static DataType vtlb_memReadUnlogged(u32 addr)
+#else
 template <typename DataType>
 DataType vtlb_memRead(u32 addr)
+#endif
 {
 	static const uint DataSize = sizeof(DataType) * 8;
 	auto vmv = vtlbdata.vmap[addr >> VTLB_PAGE_BITS];
@@ -219,7 +224,32 @@ DataType vtlb_memRead(u32 addr)
 	return 0; // technically unreachable, but suppresses warnings.
 }
 
+#if EE_DIFFERENTIAL_SHADOW
+template <typename DataType>
+DataType vtlb_memRead(u32 addr)
+{
+	if (eeDifferentialShadowActive)
+	{
+		u128 served = {};
+		if (EeShadowServeRead(addr, sizeof(DataType), served))
+			return static_cast<DataType>(served.lo);
+	}
+
+	const DataType value = vtlb_memReadUnlogged<DataType>(addr);
+	if (!eeDifferentialShadowActive)
+	{
+		const u128 logged = u128::From64(static_cast<u64>(value));
+		EeAuthorityLogRead(addr, sizeof(DataType), logged);
+	}
+	return value;
+}
+#endif
+
+#if EE_DIFFERENTIAL_SHADOW
+static RETURNS_R128 vtlb_memRead128Unlogged(u32 mem)
+#else
 RETURNS_R128 vtlb_memRead128(u32 mem)
+#endif
 {
 	auto vmv = vtlbdata.vmap[mem >> VTLB_PAGE_BITS];
 
@@ -244,8 +274,33 @@ RETURNS_R128 vtlb_memRead128(u32 mem)
 	}
 }
 
+#if EE_DIFFERENTIAL_SHADOW
+RETURNS_R128 vtlb_memRead128(u32 mem)
+{
+	if (eeDifferentialShadowActive)
+	{
+		alignas(16) u128 served = {};
+		if (EeShadowServeRead(mem, 16, served))
+			return r128_from_u128(served);
+	}
+
+	const r128 value = vtlb_memRead128Unlogged(mem);
+	if (!eeDifferentialShadowActive)
+	{
+		alignas(16) const u128 logged = r128_to_u128(value);
+		EeAuthorityLogRead(mem, 16, logged);
+	}
+	return value;
+}
+#endif
+
+#if EE_DIFFERENTIAL_SHADOW
+template <typename DataType>
+static void vtlb_memWriteUnlogged(u32 addr, DataType data)
+#else
 template <typename DataType>
 void vtlb_memWrite(u32 addr, DataType data)
+#endif
 {
 	static const uint DataSize = sizeof(DataType) * 8;
 
@@ -286,7 +341,27 @@ void vtlb_memWrite(u32 addr, DataType data)
 	}
 }
 
+#if EE_DIFFERENTIAL_SHADOW
+template <typename DataType>
+void vtlb_memWrite(u32 addr, DataType data)
+{
+	const u128 value = u128::From64(static_cast<u64>(data));
+	if (eeDifferentialShadowActive)
+	{
+		EeShadowRecordWrite(addr, sizeof(DataType), value);
+		return;
+	}
+
+	const EeAuthorityWriteScope scope(addr, sizeof(DataType), value);
+	vtlb_memWriteUnlogged<DataType>(addr, data);
+}
+#endif
+
+#if EE_DIFFERENTIAL_SHADOW
+static void TAKES_R128 vtlb_memWrite128Unlogged(u32 mem, r128 value)
+#else
 void TAKES_R128 vtlb_memWrite128(u32 mem, r128 value)
+#endif
 {
 	auto vmv = vtlbdata.vmap[mem >> VTLB_PAGE_BITS];
 
@@ -313,6 +388,21 @@ void TAKES_R128 vtlb_memWrite128(u32 mem, r128 value)
 		vmv.assumeHandler<128, true>()(paddr, value);
 	}
 }
+
+#if EE_DIFFERENTIAL_SHADOW
+void TAKES_R128 vtlb_memWrite128(u32 mem, r128 value)
+{
+	alignas(16) const u128 packed = r128_to_u128(value);
+	if (eeDifferentialShadowActive)
+	{
+		EeShadowRecordWrite(mem, 16, packed);
+		return;
+	}
+
+	const EeAuthorityWriteScope scope(mem, 16, packed);
+	vtlb_memWrite128Unlogged(mem, value);
+}
+#endif
 
 template mem8_t vtlb_memRead<mem8_t>(u32 mem);
 template mem16_t vtlb_memRead<mem16_t>(u32 mem);
