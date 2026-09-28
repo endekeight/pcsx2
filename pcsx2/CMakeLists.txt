@@ -1,6 +1,19 @@
 # All flags, libraries, etc, that are shared between PCSX2 compilation files
 add_library(PCSX2_FLAGS INTERFACE)
 
+# The EE FPU and VU multiply-accumulate instructions round the product before
+# the add, and these two interpreters serve as the reference the recompilers
+# are verified against. Global -ffp-contract=fast allows the compiler to fuse
+# them into a single rounding on any host with a fused multiply-add instruction
+# (such as every ARM64 host), so these two translation units are compiled without
+# contraction. The source code is left as a literal description of the machine
+# rather than rewritten to split the expressions. Setting COMPILE_OPTIONS on
+# source files places them after target options on the compile line, overriding
+# the interface flag for both Android and non-Android builds.
+if(NOT MSVC)
+	set_source_files_properties(FPU.cpp VUops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+endif()
+
 if(ANDROID)
 	include(android/Pcsx2Android)
 	return()
