@@ -8,6 +8,11 @@
 #include <ctime>
 #include <string>
 
+// A35 diagnostic: counts per-present renderer work for the GS_FRAME_COST_STATS line. Ships 0.
+#ifndef GS_FRAME_COST_STATS
+#define GS_FRAME_COST_STATS 0
+#endif
+
 class GSPerfMon
 {
 public:
@@ -26,6 +31,10 @@ public:
 		TextureCopiesROV, // Overlaps with regular texture copies.
 		DrawCallsROV, // Overlaps with regular draw calls.
 		BarriersROV, // Overlaps with regular barriers.
+#if GS_FRAME_COST_STATS
+		ShaderBlendDraws, // Hardware draws that end with shader blending.
+		DualSourceFallbackDraws, // Hardware draws shader-blended only because of the GS_DUAL_SOURCE_FALLBACK clause.
+#endif
 		CounterLast,
 
 		// Reused counters for HW.
@@ -39,6 +48,10 @@ public:
 protected:
 	double m_counters[CounterLast] = {};
 	double m_stats[CounterLast] = {};
+#if GS_FRAME_COST_STATS
+	// Running totals that Update() never clears.
+	double m_totals[CounterLast] = {};
+#endif
 	int m_frame = 0;
 	clock_t m_lastframe = 0;
 	int m_count = 0;
@@ -53,7 +66,16 @@ public:
 	int GetFrame() { return m_frame; }
 	void EndFrame(bool frame_only);
 
+#if GS_FRAME_COST_STATS
+	void Put(counter_t c, double val)
+	{
+		m_counters[c] += val;
+		m_totals[c] += val;
+	}
+	double GetTotal(counter_t c) const { return m_totals[c]; }
+#else
 	void Put(counter_t c, double val) { m_counters[c] += val; }
+#endif
 	double GetCounter(counter_t c) { return m_counters[c]; }
 	double Get(counter_t c) { return m_stats[c]; }
 	void Update();

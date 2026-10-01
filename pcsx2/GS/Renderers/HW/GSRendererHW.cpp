@@ -7119,6 +7119,16 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			(features.framebuffer_fetch || features.feedback_loops()))
 #endif
 		;
+
+#if GS_FRAME_COST_STATS && GS_DUAL_SOURCE_FALLBACK
+	// A35 diagnostic: true when only the dual-source fallback clause above turns on shader
+	// blending. The three upstream terms must match the force_sw_blending expression.
+	const bool frame_cost_upstream_force =
+		(features.framebuffer_fetch && (one_barrier || m_conf.require_full_barrier)) ||
+		(m_conf.ps.IsFeedbackLoopDepth() && !features.depth_feedback) ||
+		GSConfig.UseDebugBlend;
+	const bool frame_cost_fallback_only = force_sw_blending && !frame_cost_upstream_force && !sw_blending;
+#endif
 	
 	if (force_sw_blending)
 	{
@@ -7275,6 +7285,13 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 	}
 	else if (sw_blending)
 	{
+#if GS_FRAME_COST_STATS
+		g_perfmon.Put(GSPerfMon::ShaderBlendDraws, 1);
+#if GS_DUAL_SOURCE_FALLBACK
+		if (frame_cost_fallback_only)
+			g_perfmon.Put(GSPerfMon::DualSourceFallbackDraws, 1);
+#endif
+#endif
 		// Require the fix alpha vlaue
 		if (m_conf.ps.blend_c == 2)
 			m_conf.cb_ps.TA_MaxDepth_Af.a = static_cast<float>(AFIX) / 128.0f;
