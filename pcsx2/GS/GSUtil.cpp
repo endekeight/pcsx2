@@ -192,6 +192,12 @@ const char* GSUtil::GetPerfMonCounterName(GSPerfMon::counter_t counter, bool hw)
 			"Barriers",
 			"RenderPasses"
 		};
+#if GS_FRAME_COST_STATS
+		if (counter == GSPerfMon::ShaderBlendDraws)
+			return "ShaderBlendDraws";
+		if (counter == GSPerfMon::DualSourceFallbackDraws)
+			return "DualSourceFallbackDraws";
+#endif
 		return counter < std::size(names_hw) ? names_hw[counter] : "";
 	}
 	else

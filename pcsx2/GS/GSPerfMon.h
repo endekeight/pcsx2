@@ -9,9 +9,9 @@
 #include <string>
 
 // A35 diagnostic: counts per-present renderer work for the GS_FRAME_COST_STATS line. Ships 0.
-#ifndef GS_FRAME_COST_STATS
+// Defined only here, never on the compiler command line: GSPerfMon's layout depends on it,
+// so every translation unit must see the same value.
 #define GS_FRAME_COST_STATS 0
-#endif
 
 class GSPerfMon
 {
