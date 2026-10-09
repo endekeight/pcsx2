@@ -3,6 +3,10 @@
 
 //#version 420 // Keep it for text editor detection
 
+#ifndef HAS_DEPTH_RANGE_SCALE
+#define HAS_DEPTH_RANGE_SCALE 0
+#endif
+
 layout(std140, binding = 1) uniform cb20
 {
 	vec2  VertexScale;
@@ -15,6 +19,9 @@ layout(std140, binding = 1) uniform cb20
 
 	uint  MaxDepth;
 	float LineAA1Width;
+#if HAS_DEPTH_RANGE_SCALE
+	float DepthScale;
+#endif
 };
 
 #ifdef VERTEX_SHADER
@@ -87,6 +94,10 @@ void vs_main()
 
 	#if HAS_CLIP_CONTROL
 		gl_Position.z = float(z) * exp_min32;
+	#elif HAS_DEPTH_RANGE_SCALE
+		// Without clip control, DepthScale (2^(1-k)) spreads the draw's depth over all of [-1, 1],
+		// and the device sets the depth range to [0, 2^(k-32)], so the stored depth is still z * 2^-32.
+		gl_Position.z = min(float(z) * DepthScale, 2.0f) - 1.0f;
 	#else
 		gl_Position.z = (float(z) * exp_min32) * 2.0f - 1.0f;
 	#endif
@@ -170,6 +181,8 @@ ProcessedVertex load_vertex(uint index)
 
 	#if HAS_CLIP_CONTROL
 		vtx.p.z = float(z) * exp_min32;
+	#elif HAS_DEPTH_RANGE_SCALE
+		vtx.p.z = min(float(z) * DepthScale, 2.0f) - 1.0f;
 	#else
 		vtx.p.z = (float(z) * exp_min32) * 2.0f - 1.0f;
 	#endif
