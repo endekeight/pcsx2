@@ -18,6 +18,15 @@
 #ifndef GS_DUAL_SOURCE_FALLBACK
 #define GS_DUAL_SOURCE_FALLBACK 1
 #endif
+#ifndef GS_FBFETCH_ARM
+#define GS_FBFETCH_ARM 0
+#endif
+#ifndef GS_FBFETCH_PREFER_ARM
+#define GS_FBFETCH_PREFER_ARM 0
+#endif
+#if GS_FBFETCH_PREFER_ARM && !GS_FBFETCH_ARM
+#error "GS_FBFETCH_PREFER_ARM requires GS_FBFETCH_ARM"
+#endif
 
 enum class Filter
 {
