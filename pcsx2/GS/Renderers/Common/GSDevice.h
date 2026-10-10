@@ -18,6 +18,9 @@
 #ifndef GS_DUAL_SOURCE_FALLBACK
 #define GS_DUAL_SOURCE_FALLBACK 1
 #endif
+// A11/C100. GS_FBFETCH_ARM lets the OpenGL device use GL_ARM_shader_framebuffer_fetch when
+// GL_EXT_shader_framebuffer_fetch is absent; GS_FBFETCH_PREFER_ARM (diagnostic, requires
+// GS_FBFETCH_ARM) prefers the ARM extension when both exist. Both ship 0.
 #ifndef GS_FBFETCH_ARM
 #define GS_FBFETCH_ARM 0
 #endif
