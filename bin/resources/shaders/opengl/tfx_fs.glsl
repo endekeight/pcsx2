@@ -125,7 +125,7 @@ in SHADER
 	// Basically the only scenario where this'll happen is RGBA masked and DATE is active.
 	#undef PS_NO_COLOR
 	#define PS_NO_COLOR 0
-	#if defined(GL_EXT_shader_framebuffer_fetch)
+	#if defined(GL_EXT_shader_framebuffer_fetch) && !FBFETCH_USE_ARM
 		#undef TARGET_0_QUALIFIER
 		#define TARGET_0_QUALIFIER inout
 		#define LAST_FRAG_COLOR o_col0
@@ -145,7 +145,7 @@ in SHADER
 // Depth feedback mode 2 is for depth as color.
 // Use FB fetch for the feedback if it's available.
 #if SW_DEPTH && PS_NO_COLOR1 && (DEPTH_FEEDBACK_SUPPORT == 2)
-	#if HAS_FRAMEBUFFER_FETCH
+	#if HAS_FRAMEBUFFER_FETCH && !FBFETCH_USE_ARM
 		layout(location = 1) inout float o_col1;
 	#else
 		layout(location = 1) out float o_col1;
@@ -168,7 +168,7 @@ layout(binding = 3) uniform sampler2D img_prim_min;
 // Depth feedback mode 1 binds depth buffer directly as a texture.
 // Depth feedback mode 2 (depth as color) can use FB fetch for the feedback,
 // in which case we don't need to explicitly bind depth as a texture.
-#if (DEPTH_FEEDBACK_SUPPORT == 1 || (DEPTH_FEEDBACK_SUPPORT == 2 && !HAS_FRAMEBUFFER_FETCH)) && SW_DEPTH
+#if (DEPTH_FEEDBACK_SUPPORT == 1 || (DEPTH_FEEDBACK_SUPPORT == 2 && (!HAS_FRAMEBUFFER_FETCH || FBFETCH_USE_ARM))) && SW_DEPTH
 layout(binding = 4) uniform sampler2D DepthSampler;
 #endif
 
@@ -191,7 +191,7 @@ float sample_from_depth()
 {
 #if !SW_DEPTH
 	return 0.0f;
-#elif HAS_FRAMEBUFFER_FETCH && (DEPTH_FEEDBACK_SUPPORT == 2)
+#elif HAS_FRAMEBUFFER_FETCH && !FBFETCH_USE_ARM && (DEPTH_FEEDBACK_SUPPORT == 2)
 	return o_col1;
 #else
 	return texelFetch(DepthSampler, ivec2(gl_FragCoord.xy), 0).r;
