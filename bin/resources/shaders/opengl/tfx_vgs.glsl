@@ -7,6 +7,10 @@
 #define HAS_DEPTH_RANGE_SCALE 0
 #endif
 
+#ifndef VS_TME
+#define VS_TME 1
+#endif
+
 layout(std140, binding = 1) uniform cb20
 {
 	vec2  VertexScale;

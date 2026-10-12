@@ -25,6 +25,10 @@
 #define AFAIL_RGB_ONLY_SW_Z 5
 #endif
 
+#ifndef FBFETCH_USE_ARM
+#define FBFETCH_USE_ARM 0
+#endif
+
 #ifndef PS_ATST_NONE
 #define PS_ATST_NONE 0
 #define PS_ATST_LEQUAL 1
