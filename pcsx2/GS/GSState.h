@@ -29,6 +29,11 @@
 // C111 diagnostic self-test: with GS_KICK_VERIFY 1, corrupts the live result of every 256th verified
 // run so the check must report it. Ships 0.
 #define GS_KICK_VERIFY_MUTATE 0
+// C111 diagnostic self-test: with GS_KICK_VERIFY 1, flushes once in the middle of every 64th verified
+// run, in both the live and the reference pass, so the flush-point comparison runs. With
+// GS_KICK_VERIFY_MUTATE 1 as well, the live pass corrupts its state just before that flush instead of
+// at the end of the run. Ships 0. Changes where draws are split, never what is drawn.
+#define GS_KICK_VERIFY_FORCE_FLUSH 0
 
 #if GS_KICK_VERIFY
 #include <chrono>
@@ -221,6 +226,7 @@ protected:
 		bool replaying = false;
 		bool replay_abort = false;
 		bool run_mismatch = false;
+		bool force_flush = false;
 		u32 run_n = 0;          // vertices in the current run
 		u32 run_prim = 0;
 		u32 replay_flush = 0;   // intercepted flushes so far in the current replay
@@ -231,6 +237,7 @@ protected:
 		std::vector<KickVerifySnap> post;
 		u32 pre_used = 0, post_used = 0;
 		u64 runs = 0, verified = 0, kicks = 0, flush_runs = 0, flushes = 0, drawbuf_skipped = 0, nested = 0;
+		u64 forced_flushes = 0;
 		u64 grow_runs = 0, mm_grow = 0;
 		u64 kicks_unverified = 0;
 		u64 mismatch_runs = 0;

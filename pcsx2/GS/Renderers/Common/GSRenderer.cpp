@@ -664,7 +664,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	else if (kv_now - m_kv.last >= std::chrono::seconds(1))
 	{
 		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(kv_now - m_kv.last).count();
-		Console.WriteLn("GSKV: ms=%lld runs=%llu verified=%llu kicks=%llu flush_runs=%llu flushes=%llu drawbuf_skipped=%llu nested=%llu mismatch_runs=%llu mm_fields=%llu mm_prev_env=%llu mm_vtx=%llu mm_idx=%llu mm_flush_count=%llu mm_flush_reason=%llu grow_runs=%llu kicks_unverified=%llu mm_grow=%llu mm_packet=%llu",
+		Console.WriteLn("GSKV: ms=%lld runs=%llu verified=%llu kicks=%llu flush_runs=%llu flushes=%llu drawbuf_skipped=%llu nested=%llu mismatch_runs=%llu mm_fields=%llu mm_prev_env=%llu mm_vtx=%llu mm_idx=%llu mm_flush_count=%llu mm_flush_reason=%llu grow_runs=%llu kicks_unverified=%llu mm_grow=%llu mm_packet=%llu forced_flushes=%llu",
 			static_cast<long long>(ms),
 			static_cast<unsigned long long>(m_kv.runs),
 			static_cast<unsigned long long>(m_kv.verified),
@@ -683,7 +683,8 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			static_cast<unsigned long long>(m_kv.grow_runs),
 			static_cast<unsigned long long>(m_kv.kicks_unverified),
 			static_cast<unsigned long long>(m_kv.mm_grow),
-			static_cast<unsigned long long>(m_kv.mm_packet));
+			static_cast<unsigned long long>(m_kv.mm_packet),
+			static_cast<unsigned long long>(m_kv.forced_flushes));
 		m_kv.last = kv_now;
 	}
 #endif

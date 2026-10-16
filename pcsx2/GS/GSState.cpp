@@ -1822,6 +1822,9 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
+#if GS_KICK_VERIFY_FORCE_FLUSH
+	u32 kick_index = 0;
+#endif
 	while (r < r_end)
 	{
 		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
@@ -1840,13 +1843,26 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
 
 		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+#if GS_KICK_VERIFY_FORCE_FLUSH
+		if (m_kv.force_flush && kick_index == m_kv.run_n / 2 && m_index->tail > 0)
+		{
+#if GS_KICK_VERIFY_MUTATE
+			if (m_kv.recording)
+				m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
+#endif
+			if (m_kv.recording)
+				m_kv.forced_flushes++;
+			Flush(GSFlushReason::CONTEXTCHANGE);
+		}
+		kick_index++;
+#endif
 
 		r += 3;
 	}
 
 	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
 
-#if GS_KICK_VERIFY_MUTATE
+#if GS_KICK_VERIFY_MUTATE && !GS_KICK_VERIFY_FORCE_FLUSH
 	if (m_kv.recording && (m_kv.verified & 255) == 0)
 		m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
 #endif
@@ -1857,6 +1873,9 @@ void GSState::KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
+#if GS_KICK_VERIFY_FORCE_FLUSH
+	u32 kick_index = 0;
+#endif
 	while (r < r_end)
 	{
 		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
@@ -1877,6 +1896,21 @@ void GSState::KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size)
 		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
 		if (m_kv.replay_abort)
 			break;
+#if GS_KICK_VERIFY_FORCE_FLUSH
+		if (m_kv.force_flush && kick_index == m_kv.run_n / 2 && m_index->tail > 0)
+		{
+#if GS_KICK_VERIFY_MUTATE
+			if (m_kv.recording)
+				m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
+#endif
+			if (m_kv.recording)
+				m_kv.forced_flushes++;
+			Flush(GSFlushReason::CONTEXTCHANGE);
+		}
+		kick_index++;
+#endif
+		if (m_kv.replay_abort)
+			break;
 
 		r += 3;
 	}
@@ -1888,6 +1922,9 @@ void GSState::KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size)
 template <u32 prim, bool auto_flush>
 void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 {
+#if GS_KICK_VERIFY_FORCE_FLUSH
+	m_kv.force_flush = false;
+#endif
 	m_kv.runs++;
 	if (m_kv.recording || m_kv.replaying)
 	{
@@ -1914,6 +1951,9 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 	const u32 vb = (vlo > 64) ? (vlo - 64) : 0;
 	const u32 ib = (m_index->tail > 192) ? (m_index->tail - 192) : 0;
 	KickVerifyCapture(m_kv.s0, vb, m_vertex->tail + n + 3, ib, m_index->tail + 3 * n + 3);
+#if GS_KICK_VERIFY_FORCE_FLUSH
+	m_kv.force_flush = (m_kv.verified & 63) == 0;
+#endif
 	m_kv.recording = true;
 	KickVerifyLiveLoop<prim, auto_flush>(r, size);
 	m_kv.recording = false;
@@ -1941,6 +1981,9 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 	m_kv.replay_flush = 0;
 	KickVerifyReferenceLoop<prim, auto_flush>(r, size);
 	m_kv.replaying = false;
+#if GS_KICK_VERIFY_FORCE_FLUSH
+	m_kv.force_flush = false;
+#endif
 	const u64 pkt_after = KickVerifyHash(r, size);
 	if (pkt_before != pkt_after)
 	{
