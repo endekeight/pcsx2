@@ -1504,6 +1504,9 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 
 	CheckFlushes();
 
+#if GS_KICK_VERIFY
+	KickVerifyRun<prim, auto_flush>(r, size);
+#else
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
 	while (r < r_end)
@@ -1529,7 +1532,359 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 	}
 
 	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
+#endif
 }
+
+#if GS_KICK_VERIFY
+void GSState::KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u32 idx_begin, u32 idx_end)
+{
+	std::memset(&s.f, 0, sizeof(s.f));
+	s.f.head = m_vertex->head;
+	s.f.tail = m_vertex->tail;
+	s.f.next = m_vertex->next;
+	s.f.xy_tail = m_vertex->xy_tail;
+	for (int i = 0; i < 4; ++i)
+		s.f.xy[i] = m_vertex->xy[i];
+	s.f.xyhead = m_vertex->xyhead;
+	s.f.idx_tail = m_index->tail;
+	s.f.v = m_v;
+	s.f.q = m_q;
+	s.f.temp_draw_rect = temp_draw_rect;
+	s.f.dirty_gs_regs = m_dirty_gs_regs;
+	s.f.backed_up_ctx = m_backed_up_ctx;
+	s.f.texflush_flag = m_texflush_flag ? 1u : 0u;
+
+	std::memcpy(&s.prev_env, &m_prev_env, sizeof(m_prev_env));
+
+	const u32 vcap = m_max_vertex_count + 3;
+	const u32 icap = (m_max_vertex_count + 3) * 6;
+
+	vtx_end = std::min(vtx_end, vcap);
+	vtx_begin = std::min(vtx_begin, vtx_end);
+	idx_end = std::min(idx_end, icap);
+	idx_begin = std::min(idx_begin, idx_end);
+
+	s.vtx_begin = vtx_begin;
+	s.vtx_end = vtx_end;
+	s.idx_begin = idx_begin;
+	s.idx_end = idx_end;
+
+	const u32 vcount = vtx_end - vtx_begin;
+	s.vtx.resize(vcount);
+	if (vcount > 0)
+		std::memcpy(s.vtx.data(), m_vertex->buff + vtx_begin, vcount * sizeof(GSVertex));
+
+	const u32 icount = idx_end - idx_begin;
+	s.idx.resize(icount);
+	if (icount > 0)
+		std::memcpy(s.idx.data(), m_index->buff + idx_begin, icount * sizeof(u16));
+}
+
+void GSState::KickVerifyRestore(const KickVerifySnap& s)
+{
+	m_vertex->head = s.f.head;
+	m_vertex->tail = s.f.tail;
+	m_vertex->next = s.f.next;
+	m_vertex->xy_tail = s.f.xy_tail;
+	for (int i = 0; i < 4; ++i)
+		m_vertex->xy[i] = s.f.xy[i];
+	m_vertex->xyhead = s.f.xyhead;
+	m_index->tail = s.f.idx_tail;
+	m_v = s.f.v;
+	m_q = s.f.q;
+	temp_draw_rect = s.f.temp_draw_rect;
+	m_dirty_gs_regs = s.f.dirty_gs_regs;
+	m_backed_up_ctx = s.f.backed_up_ctx;
+	m_texflush_flag = (s.f.texflush_flag != 0);
+
+	std::memcpy(&m_prev_env, &s.prev_env, sizeof(m_prev_env));
+
+	if (!s.vtx.empty())
+		std::memcpy(m_vertex->buff + s.vtx_begin, s.vtx.data(), s.vtx.size() * sizeof(GSVertex));
+
+	if (!s.idx.empty())
+		std::memcpy(m_index->buff + s.idx_begin, s.idx.data(), s.idx.size() * sizeof(u16));
+}
+
+bool GSState::KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap& ref, const char* point, u32 k)
+{
+	bool matched = true;
+
+	if (std::memcmp(&live.f, &ref.f, sizeof(KickVerifyFields)) != 0)
+	{
+		matched = false;
+		m_kv.mm_fields++;
+		u32 first = 0;
+		const u8* lb = reinterpret_cast<const u8*>(&live.f);
+		const u8* rb = reinterpret_cast<const u8*>(&ref.f);
+		for (u32 i = 0; i < sizeof(KickVerifyFields); ++i)
+		{
+			if (lb[i] != rb[i])
+			{
+				first = i;
+				break;
+			}
+		}
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u live_tail=%u ref_tail=%u live_head=%u ref_head=%u live_idx_tail=%u ref_idx_tail=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "fields", m_kv.run_prim, m_kv.run_n, first,
+				live.f.tail, ref.f.tail, live.f.head, ref.f.head, live.f.idx_tail, ref.f.idx_tail);
+			m_kv.details++;
+		}
+	}
+
+	if (std::memcmp(&live.prev_env, &ref.prev_env, sizeof(GSDrawingEnvironment)) != 0)
+	{
+		matched = false;
+		m_kv.mm_prev_env++;
+		u32 first = 0;
+		const u8* lb = reinterpret_cast<const u8*>(&live.prev_env);
+		const u8* rb = reinterpret_cast<const u8*>(&ref.prev_env);
+		for (u32 i = 0; i < sizeof(GSDrawingEnvironment); ++i)
+		{
+			if (lb[i] != rb[i])
+			{
+				first = i;
+				break;
+			}
+		}
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "prev_env", m_kv.run_prim, m_kv.run_n, first);
+			m_kv.details++;
+		}
+	}
+
+	bool vtx_diff = false;
+	u32 first_vtx = 0;
+	if (live.vtx.size() != ref.vtx.size())
+	{
+		vtx_diff = true;
+		first_vtx = live.vtx_begin + static_cast<u32>(std::min(live.vtx.size(), ref.vtx.size()));
+	}
+	else if (!live.vtx.empty() && std::memcmp(live.vtx.data(), ref.vtx.data(), live.vtx.size() * sizeof(GSVertex)) != 0)
+	{
+		vtx_diff = true;
+		for (size_t i = 0; i < live.vtx.size(); ++i)
+		{
+			if (std::memcmp(&live.vtx[i], &ref.vtx[i], sizeof(GSVertex)) != 0)
+			{
+				first_vtx = live.vtx_begin + static_cast<u32>(i);
+				break;
+			}
+		}
+	}
+	if (vtx_diff)
+	{
+		matched = false;
+		m_kv.mm_vtx++;
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "vtx", m_kv.run_prim, m_kv.run_n, first_vtx);
+			m_kv.details++;
+		}
+	}
+
+	bool idx_diff = false;
+	u32 first_idx = 0;
+	if (live.idx.size() != ref.idx.size())
+	{
+		idx_diff = true;
+		first_idx = live.idx_begin + static_cast<u32>(std::min(live.idx.size(), ref.idx.size()));
+	}
+	else if (!live.idx.empty() && std::memcmp(live.idx.data(), ref.idx.data(), live.idx.size() * sizeof(u16)) != 0)
+	{
+		idx_diff = true;
+		for (size_t i = 0; i < live.idx.size(); ++i)
+		{
+			if (live.idx[i] != ref.idx[i])
+			{
+				first_idx = live.idx_begin + static_cast<u32>(i);
+				break;
+			}
+		}
+	}
+	if (idx_diff)
+	{
+		matched = false;
+		m_kv.mm_idx++;
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "idx", m_kv.run_prim, m_kv.run_n, first_idx);
+			m_kv.details++;
+		}
+	}
+
+	if (!matched)
+		m_kv.run_mismatch = true;
+
+	return matched;
+}
+
+void GSState::KickVerifyOnFlushEnter(u32 reason)
+{
+	if (!m_kv.recording)
+		return;
+
+	if (m_kv.pre.size() <= m_kv.pre_used)
+		m_kv.pre.emplace_back();
+
+	KickVerifyCapture(m_kv.pre[m_kv.pre_used], 0, m_vertex->tail + m_kv.run_n + 3, 0, m_index->tail + 3 * m_kv.run_n + 3);
+	m_kv.pre[m_kv.pre_used].reason = reason;
+	m_kv.pre_used++;
+	m_kv.flushes++;
+}
+
+void GSState::KickVerifyOnFlushExit()
+{
+	if (!m_kv.recording)
+		return;
+
+	if (m_kv.post.size() <= m_kv.post_used)
+		m_kv.post.emplace_back();
+
+	KickVerifyCapture(m_kv.post[m_kv.post_used], 0, m_vertex->tail + m_kv.run_n + 3, 0, m_index->tail + 3 * m_kv.run_n + 3);
+	m_kv.post_used++;
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero()); // see GIFPackedRegHandlerSTQ
+
+		m_v.m[0] = st.upl64(rgba.upl32(q)); // TODO: only store the last one
+
+		GSVector4i xy = GSVector4i::loadl(&r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
+
+		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+
+		r += 3;
+	}
+
+	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
+
+#if GS_KICK_VERIFY_MUTATE
+	if ((m_kv.verified & 255) == 0)
+		m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
+#endif
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero()); // see GIFPackedRegHandlerSTQ
+
+		m_v.m[0] = st.upl64(rgba.upl32(q)); // TODO: only store the last one
+
+		GSVector4i xy = GSVector4i::loadl(&r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
+
+		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+		if (m_kv.replay_abort)
+			break;
+
+		r += 3;
+	}
+
+	if (!m_kv.replay_abort)
+		m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	m_kv.runs++;
+	if (m_kv.recording || m_kv.replaying)
+	{
+		m_kv.nested++;
+		KickVerifyLiveLoop<prim, auto_flush>(r, size);
+		return;
+	}
+	if (GSConfig.UserHacks_DrawBuffering)
+	{
+		m_kv.drawbuf_skipped++;
+		KickVerifyLiveLoop<prim, auto_flush>(r, size);
+		return;
+	}
+	const u32 n = size / 3;
+	m_kv.run_n = n;
+	m_kv.run_prim = prim;
+	m_kv.run_mismatch = false;
+	m_kv.pre_used = 0;
+	m_kv.post_used = 0;
+	const u32 vb = std::min(m_vertex->head, m_vertex->next);
+	const u32 ib = m_index->tail;
+	KickVerifyCapture(m_kv.s0, vb, m_vertex->tail + n + 3, ib, m_index->tail + 3 * n + 3);
+	m_kv.recording = true;
+	KickVerifyLiveLoop<prim, auto_flush>(r, size);
+	m_kv.recording = false;
+	const bool flushed = m_kv.pre_used != 0;
+	if (!flushed)
+		KickVerifyCapture(m_kv.end, m_kv.s0.vtx_begin, m_kv.s0.vtx_end, m_kv.s0.idx_begin, m_kv.s0.idx_end);
+	else
+		KickVerifyCapture(m_kv.end, 0, m_kv.post[m_kv.post_used - 1].vtx_end, 0, m_kv.post[m_kv.post_used - 1].idx_end);
+	// Reference replay from the pre-run state.
+	if (flushed)
+	{
+		m_kv.flush_runs++;
+		// The run never wrote below its window, so pre-flush snapshot 0 holds the pre-run draw there.
+		KickVerifyRestore(m_kv.pre[0]);
+	}
+	KickVerifyRestore(m_kv.s0);
+	m_kv.replaying = true;
+	m_kv.replay_abort = false;
+	m_kv.replay_flush = 0;
+	KickVerifyReferenceLoop<prim, auto_flush>(r, size);
+	m_kv.replaying = false;
+	bool ok = true;
+	if (m_kv.replay_abort || m_kv.replay_flush != m_kv.pre_used)
+	{
+		if (!m_kv.replay_abort)
+			m_kv.mm_flush_count++;
+		ok = false;
+	}
+	else
+	{
+		KickVerifyCapture(m_kv.ref, m_kv.end.vtx_begin, m_kv.end.vtx_end, m_kv.end.idx_begin, m_kv.end.idx_end);
+		ok = KickVerifyCompare(m_kv.end, m_kv.ref, "end", 0);
+	}
+	ok = ok && !m_kv.run_mismatch;
+	KickVerifyRestore(m_kv.end);
+	m_kv.kicks += n;
+	if (!ok)
+		m_kv.mismatch_runs++;
+	m_kv.verified++;
+}
+#endif
 
 template <u32 prim, bool auto_flush>
 void GSState::GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size)
@@ -2329,12 +2684,34 @@ void GSState::GIFRegHandlerHWREG(const GIFReg* RESTRICT r)
 
 void GSState::Flush(GSFlushReason reason)
 {
+#if GS_KICK_VERIFY
+	if (m_kv.replaying)
+	{
+		const u32 k = m_kv.replay_flush++;
+		if (k >= m_kv.pre_used)
+		{
+			m_kv.mm_flush_count++;
+			m_kv.replay_abort = true;
+			return;
+		}
+		if (static_cast<u32>(reason) != m_kv.pre[k].reason)
+			m_kv.mm_flush_reason++;
+		KickVerifyCapture(m_kv.ref, m_kv.pre[k].vtx_begin, m_kv.pre[k].vtx_end, m_kv.pre[k].idx_begin, m_kv.pre[k].idx_end);
+		KickVerifyCompare(m_kv.pre[k], m_kv.ref, "flush", k);
+		KickVerifyRestore(m_kv.post[k]);
+		return;
+	}
+	KickVerifyOnFlushEnter(static_cast<u32>(reason));
+#endif
 	SetDrawBuffDirty();
 
 	FlushWrite();
 
 	FlushBuffers(false, true, reason);
 	ResetDrawBufferIdx();
+#if GS_KICK_VERIFY
+	KickVerifyOnFlushExit();
+#endif
 }
 
 void GSState::FlushDraw(GSFlushReason reason)

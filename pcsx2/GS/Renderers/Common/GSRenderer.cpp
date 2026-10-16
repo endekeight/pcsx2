@@ -35,6 +35,11 @@
 #include <chrono>
 #endif
 
+#if GS_KICK_VERIFY
+#include "common/Console.h"
+#include <chrono>
+#endif
+
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -648,6 +653,34 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_parse_stats.k_ctx_backup = 0;
 		m_parse_stats.vsyncs = 0;
 		m_parse_stats.last = now;
+	}
+#endif
+#if GS_KICK_VERIFY
+	const auto kv_now = std::chrono::steady_clock::now();
+	if (m_kv.last == std::chrono::steady_clock::time_point{})
+	{
+		m_kv.last = kv_now;
+	}
+	else if (kv_now - m_kv.last >= std::chrono::seconds(1))
+	{
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(kv_now - m_kv.last).count();
+		Console.WriteLn("GSKV: ms=%lld runs=%llu verified=%llu kicks=%llu flush_runs=%llu flushes=%llu drawbuf_skipped=%llu nested=%llu mismatch_runs=%llu mm_fields=%llu mm_prev_env=%llu mm_vtx=%llu mm_idx=%llu mm_flush_count=%llu mm_flush_reason=%llu",
+			static_cast<long long>(ms),
+			static_cast<unsigned long long>(m_kv.runs),
+			static_cast<unsigned long long>(m_kv.verified),
+			static_cast<unsigned long long>(m_kv.kicks),
+			static_cast<unsigned long long>(m_kv.flush_runs),
+			static_cast<unsigned long long>(m_kv.flushes),
+			static_cast<unsigned long long>(m_kv.drawbuf_skipped),
+			static_cast<unsigned long long>(m_kv.nested),
+			static_cast<unsigned long long>(m_kv.mismatch_runs),
+			static_cast<unsigned long long>(m_kv.mm_fields),
+			static_cast<unsigned long long>(m_kv.mm_prev_env),
+			static_cast<unsigned long long>(m_kv.mm_vtx),
+			static_cast<unsigned long long>(m_kv.mm_idx),
+			static_cast<unsigned long long>(m_kv.mm_flush_count),
+			static_cast<unsigned long long>(m_kv.mm_flush_reason));
+		m_kv.last = kv_now;
 	}
 #endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))

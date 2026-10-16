@@ -23,6 +23,18 @@
 #include <chrono>
 #endif
 
+// C111 diagnostic: runs every packed STQ/RGBA/XYZF2 run twice, live and reference, and compares the
+// vertex-kick state byte for byte (GSKV line). Ships 0. Defined only here: GSState's layout depends on it.
+#define GS_KICK_VERIFY 0
+// C111 diagnostic self-test: with GS_KICK_VERIFY 1, corrupts the live result of every 256th verified
+// run so the check must report it. Ships 0.
+#define GS_KICK_VERIFY_MUTATE 0
+
+#if GS_KICK_VERIFY
+#include <chrono>
+#include <vector>
+#endif
+
 class GSDumpBase;
 
 class GSState : public GSAlignedClass<32>
@@ -66,6 +78,11 @@ private:
 	GIFPackedRegHandlerC m_fpGIFPackedRegHandlerSTQRGBAXYZ2[8] = {};
 
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+#if GS_KICK_VERIFY
+	template <u32 prim, bool auto_flush> void KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush> void KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush> void KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size);
+#endif
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size);
 	void GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r, u32 size);
 
@@ -171,6 +188,59 @@ protected:
 	};
 
 	ParseStats m_parse_stats{};
+#endif
+
+#if GS_KICK_VERIFY
+	struct KickVerifyFields
+	{
+		u32 head, tail, next, xy_tail;
+		GSVector4i xy[4];
+		GSVector4i xyhead;
+		u32 idx_tail;
+		GSVertex v;
+		float q;
+		GSVector4i temp_draw_rect;
+		u32 dirty_gs_regs;
+		int backed_up_ctx;
+		u32 texflush_flag;
+	};
+	struct KickVerifySnap
+	{
+		KickVerifyFields f;
+		GSDrawingEnvironment prev_env;
+		u32 vtx_begin = 0, vtx_end = 0;
+		u32 idx_begin = 0, idx_end = 0;
+		std::vector<GSVertex> vtx;
+		std::vector<u16> idx;
+		u32 reason = 0; // a GSFlushReason value; stored as u32 because the enum is declared later in the class
+	};
+	struct KickVerify
+	{
+		bool recording = false;
+		bool replaying = false;
+		bool replay_abort = false;
+		bool run_mismatch = false;
+		u32 run_n = 0;          // vertices in the current run
+		u32 run_prim = 0;
+		u32 replay_flush = 0;   // intercepted flushes so far in the current replay
+		KickVerifySnap s0;
+		KickVerifySnap end;
+		KickVerifySnap ref;     // scratch for the reference side
+		std::vector<KickVerifySnap> pre;
+		std::vector<KickVerifySnap> post;
+		u32 pre_used = 0, post_used = 0;
+		u64 runs = 0, verified = 0, kicks = 0, flush_runs = 0, flushes = 0, drawbuf_skipped = 0, nested = 0;
+		u64 mismatch_runs = 0;
+		u64 mm_fields = 0, mm_prev_env = 0, mm_vtx = 0, mm_idx = 0, mm_flush_count = 0, mm_flush_reason = 0;
+		u64 details = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+	KickVerify m_kv;
+	void KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u32 idx_begin, u32 idx_end);
+	void KickVerifyRestore(const KickVerifySnap& s);
+	bool KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap& ref, const char* point, u32 k);
+	void KickVerifyOnFlushEnter(u32 reason);
+	void KickVerifyOnFlushExit();
 #endif
 
 	GSVertex m_v = {};
