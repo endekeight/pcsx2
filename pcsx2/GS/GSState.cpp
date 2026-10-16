@@ -1367,6 +1367,9 @@ void GSState::DumpTransferImages()
 
 __inline void GSState::CheckFlushes()
 {
+#if GS_PARSE_STATS
+	m_parse_stats.cf_calls++;
+#endif
 	if (m_dirty_gs_regs && m_index->tail > 0)
 	{
 		if (TestDrawChanged())
@@ -1374,6 +1377,9 @@ __inline void GSState::CheckFlushes()
 			SetDrawBuffDirty();
 			if (!CanBufferNewDraw())
 			{
+#if GS_PARSE_STATS
+				m_parse_stats.cf_flushes++;
+#endif
 				FlushBuffers(false, false);
 				ResetDrawBufferIdx();
 			}
@@ -1488,6 +1494,12 @@ void GSState::GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r)
 template <u32 prim, bool auto_flush>
 void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size)
 {
+#if GS_PARSE_STATS
+	m_parse_stats.stq_calls++;
+	if constexpr (auto_flush)
+		m_parse_stats.stq_af_calls++;
+	m_parse_stats.stq_verts += (size / 3);
+#endif
 	pxAssert(size > 0 && size % 3 == 0);
 
 	CheckFlushes();
@@ -5442,9 +5454,19 @@ __forceinline void GSState::CheckCLUTValidity(u32 prim)
 template<u32 prim>
 __forceinline void GSState::HandleAutoFlush()
 {
+#if GS_PARSE_STATS
+	m_parse_stats.af_checks++;
+#endif
 	// Kind of a cheat, making the assumption that 2 consecutive fan/strip triangles won't overlap each other (*should* be safe)
 	if ((m_index->tail & 1) && (prim == GS_TRIANGLESTRIP || prim == GS_TRIANGLEFAN) && !m_texflush_flag)
+#if GS_PARSE_STATS
+	{
+		m_parse_stats.af_strip_skips++;
 		return;
+	}
+#else
+		return;
+#endif
 
 	GSVertexBuff& vtx_buff = *m_vertex;
 	GSIndexBuff& idx_buff = *m_index;
@@ -5454,6 +5476,9 @@ __forceinline void GSState::HandleAutoFlush()
 	int tex_layer = 0;
 	if (IsAutoFlushDraw(prim, tex_layer))
 	{
+#if GS_PARSE_STATS
+		m_parse_stats.af_selfread++;
+#endif
 		int  n = 1;
 		u32 buff[3];
 		const u32 head = vtx_buff.head;
@@ -5647,6 +5672,9 @@ __forceinline void GSState::HandleAutoFlush()
 			return;
 		else if (m_texflush_flag)
 		{
+#if GS_PARSE_STATS
+			m_parse_stats.af_flushes++;
+#endif
 			Flush(GSFlushReason::AUTOFLUSH);
 			return;
 		}
@@ -5718,6 +5746,9 @@ __forceinline void GSState::HandleAutoFlush()
 					old_draw_rect = tex_rect.rintersect(old_draw_rect);
 					if (!old_draw_rect.rintersect(scissor).rempty())
 					{
+#if GS_PARSE_STATS
+						m_parse_stats.af_flushes++;
+#endif
 						Flush(GSFlushReason::AUTOFLUSH);
 						return;
 					}
@@ -5745,10 +5776,24 @@ __forceinline void GSState::HandleAutoFlush()
 					area_out = GSVector4i(area_out.x / frame_psm.pgs.x, area_out.y / frame_psm.pgs.y, area_out.z / frame_psm.pgs.x, area_out.w / frame_psm.pgs.y);
 
 					if (!area_out.rintersect(tex_rect).rempty())
+#if GS_PARSE_STATS
+					{
+						m_parse_stats.af_flushes++;
 						Flush(GSFlushReason::AUTOFLUSH);
+					}
+#else
+						Flush(GSFlushReason::AUTOFLUSH);
+#endif
 				}
 				else // Formats are too different so just flush it.
+#if GS_PARSE_STATS
+				{
+					m_parse_stats.af_flushes++;
 					Flush(GSFlushReason::AUTOFLUSH);
+				}
+#else
+					Flush(GSFlushReason::AUTOFLUSH);
+#endif
 			}
 		}
 	}
@@ -5844,6 +5889,12 @@ __forceinline void GSState::VertexKick(u32 skip)
 		vtx_buff.tail = vtx_buff.head;
 		return;
 	}
+
+#if GS_PARSE_STATS
+	m_parse_stats.kicks++;
+	if constexpr (auto_flush)
+		m_parse_stats.af_kicks++;
+#endif
 
 	if (GSConfig.UserHacks_DrawBuffering)
 		if (CheckOverlapVerts(n))

@@ -14,6 +14,15 @@
 #include "GS/GSVector.h"
 #include "GSAlignedClass.h"
 
+// C110 diagnostic: counts GIF packed-vertex parsing and auto-flush work for the GSPARSE line. Ships 0.
+// Defined only here, never on the compiler command line: GSState's layout depends on it,
+// so every translation unit must see the same value.
+#define GS_PARSE_STATS 0
+
+#if GS_PARSE_STATS
+#include <chrono>
+#endif
+
 class GSDumpBase;
 
 class GSState : public GSAlignedClass<32>
@@ -128,6 +137,27 @@ private:
 protected:
 	static constexpr int INVALID_ALPHA_MINMAX = 500;
 	static constexpr int MAX_DRAW_BUFFERS = 3;
+
+#if GS_PARSE_STATS
+	struct ParseStats
+	{
+		u64 kicks = 0;
+		u64 af_kicks = 0;
+		u64 af_checks = 0;
+		u64 af_strip_skips = 0;
+		u64 af_selfread = 0;
+		u64 af_flushes = 0;
+		u64 stq_calls = 0;
+		u64 stq_af_calls = 0;
+		u64 stq_verts = 0;
+		u64 cf_calls = 0;
+		u64 cf_flushes = 0;
+		u64 vsyncs = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	ParseStats m_parse_stats{};
+#endif
 
 	GSVertex m_v = {};
 	float m_q = 1.0f;

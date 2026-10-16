@@ -30,6 +30,11 @@
 #include <thread>
 #include <mutex>
 
+#if GS_PARSE_STATS
+#include "common/Console.h"
+#include <chrono>
+#endif
+
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -577,6 +582,45 @@ void GSRenderer::EndPresentFrame()
 
 void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 {
+#if GS_PARSE_STATS
+	m_parse_stats.vsyncs++;
+	const auto now = std::chrono::steady_clock::now();
+	if (m_parse_stats.last == std::chrono::steady_clock::time_point{})
+	{
+		m_parse_stats.last = now;
+	}
+	else if (now - m_parse_stats.last >= std::chrono::seconds(1))
+	{
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_parse_stats.last).count();
+		Console.WriteLn("GSPARSE: ms=%lld vsyncs=%llu kicks=%llu af_kicks=%llu af_checks=%llu af_strip_skips=%llu af_selfread=%llu af_flushes=%llu stq_calls=%llu stq_af_calls=%llu stq_verts=%llu cf_calls=%llu cf_flushes=%llu",
+			static_cast<long long>(ms),
+			static_cast<unsigned long long>(m_parse_stats.vsyncs),
+			static_cast<unsigned long long>(m_parse_stats.kicks),
+			static_cast<unsigned long long>(m_parse_stats.af_kicks),
+			static_cast<unsigned long long>(m_parse_stats.af_checks),
+			static_cast<unsigned long long>(m_parse_stats.af_strip_skips),
+			static_cast<unsigned long long>(m_parse_stats.af_selfread),
+			static_cast<unsigned long long>(m_parse_stats.af_flushes),
+			static_cast<unsigned long long>(m_parse_stats.stq_calls),
+			static_cast<unsigned long long>(m_parse_stats.stq_af_calls),
+			static_cast<unsigned long long>(m_parse_stats.stq_verts),
+			static_cast<unsigned long long>(m_parse_stats.cf_calls),
+			static_cast<unsigned long long>(m_parse_stats.cf_flushes));
+		m_parse_stats.kicks = 0;
+		m_parse_stats.af_kicks = 0;
+		m_parse_stats.af_checks = 0;
+		m_parse_stats.af_strip_skips = 0;
+		m_parse_stats.af_selfread = 0;
+		m_parse_stats.af_flushes = 0;
+		m_parse_stats.stq_calls = 0;
+		m_parse_stats.stq_af_calls = 0;
+		m_parse_stats.stq_verts = 0;
+		m_parse_stats.cf_calls = 0;
+		m_parse_stats.cf_flushes = 0;
+		m_parse_stats.vsyncs = 0;
+		m_parse_stats.last = now;
+	}
+#endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
 	{
 		if (GSConfig.SaveInfo)
