@@ -34,6 +34,10 @@
 // GS_KICK_VERIFY_MUTATE 1 as well, the live pass corrupts its state just before that flush instead of
 // at the end of the run. Ships 0. Changes where draws are split, never what is drawn.
 #define GS_KICK_VERIFY_FORCE_FLUSH 0
+// C111: packed STQ/RGBA/XYZF2 runs evaluate VertexKick's vertex-independent tests once per run (VertexKickFast).
+// Ships 0 until the differential check and the A/B pass. Defined only here.
+#define GS_KICK_FAST 0
+
 
 #if GS_KICK_VERIFY
 #include <chrono>
@@ -254,6 +258,10 @@ protected:
 	void KickVerifyOnFlushExit();
 #endif
 
+#if GS_KICK_FAST
+	u32 m_kick_flush_epoch = 0;
+#endif
+
 	GSVertex m_v = {};
 	float m_q = 1.0f;
 	GSVector4i m_xyof = {};
@@ -317,6 +325,21 @@ protected:
 	bool CheckOverlapVerts(u32 n);
 
 	template <u32 prim, bool auto_flush> void VertexKick(u32 skip);
+#if GS_KICK_FAST
+	struct KickRunConsts
+	{
+		GSVector4i scissor_cull;
+		GSVector4i scissor_in;
+		u32 flush_epoch;
+		u8 z_mode; // 0: no 24-bit depth change, 1: PrioritizeUpper, 2: PrioritizeLower
+		bool scissor_invalid;
+		bool nativeres;
+		bool aa1_expand;
+	};
+	void KickFastRefresh(KickRunConsts& c);
+	template <u32 prim, bool auto_flush> void VertexKickFast(u32 skip, KickRunConsts& c);
+	template <u32 prim, bool auto_flush> void KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size);
+#endif
 
 	// following functions need m_vt to be initialized
 

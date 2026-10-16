@@ -1507,6 +1507,13 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 #if GS_KICK_VERIFY
 	KickVerifyRun<prim, auto_flush>(r, size);
 #else
+#if GS_KICK_FAST
+	if (!GSConfig.UserHacks_DrawBuffering)
+	{
+		KickFastLoop<prim, auto_flush>(r, size);
+		return;
+	}
+#endif
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
 	while (r < r_end)
@@ -1822,6 +1829,11 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
+#if GS_KICK_FAST
+	KickRunConsts c;
+	KickFastRefresh(c);
+#endif
+
 #if GS_KICK_VERIFY_FORCE_FLUSH
 	u32 kick_index = 0;
 #endif
@@ -1842,7 +1854,11 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 
 		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
 
+#if GS_KICK_FAST
+		VertexKickFast<prim, auto_flush>(r[2].XYZF2.Skip(), c);
+#else
 		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+#endif
 #if GS_KICK_VERIFY_FORCE_FLUSH
 		if (m_kv.force_flush && kick_index == m_kv.run_n / 2 && m_index->tail > 0)
 		{
@@ -2827,6 +2843,9 @@ void GSState::GIFRegHandlerHWREG(const GIFReg* RESTRICT r)
 
 void GSState::Flush(GSFlushReason reason)
 {
+#if GS_KICK_FAST
+	m_kick_flush_epoch++;
+#endif
 #if GS_KICK_VERIFY
 	if (m_kv.replaying)
 	{
@@ -6739,6 +6758,372 @@ __forceinline void GSState::VertexKick(u32 skip)
 	if (max_vertices != 0 && vtx_buff.tail >= max_vertices)
 		Flush(VERTEXCOUNT);
 }
+
+#if GS_KICK_FAST
+void GSState::KickFastRefresh(KickRunConsts& c)
+{
+	c.scissor_cull = m_context->scissor.cull;
+	c.scissor_in = m_context->scissor.in;
+	c.z_mode = 0;
+	if (GSIsHardwareRenderer() && GSLocalMemory::m_psm[m_context->ZBUF.PSM].bpp == 32)
+	{
+		if (GSConfig.UserHacks_Limit24BitDepth == GSLimit24BitDepth::PrioritizeUpper)
+			c.z_mode = 1;
+		else if (GSConfig.UserHacks_Limit24BitDepth == GSLimit24BitDepth::PrioritizeLower)
+			c.z_mode = 2;
+	}
+	c.scissor_invalid = m_scissor_invalid;
+	c.nativeres = m_nativeres;
+	c.aa1_expand = PRIM->AA1 && IsCoverageAlphaSupported();
+	c.flush_epoch = m_kick_flush_epoch;
+}
+
+template <u32 prim, bool auto_flush>
+__forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
+{
+	constexpr u32 n = NumIndicesForPrim(prim);
+	constexpr int primclass = GSUtil::GetPrimClass(prim);
+	GSVertexBuff& vtx_buff = *m_vertex;
+	GSIndexBuff& idx_buff = *m_index;
+	static_assert(n > 0);
+	pxAssert(vtx_buff.tail < m_max_vertex_count + 3);
+
+	if constexpr (prim == GS_INVALID)
+	{
+		vtx_buff.tail = vtx_buff.head;
+		return;
+	}
+
+#if GS_PARSE_STATS
+	m_parse_stats.kicks++;
+	if constexpr (auto_flush)
+		m_parse_stats.af_kicks++;
+	if (skip != 0)
+		m_parse_stats.k_caller_skip++;
+	if constexpr (prim == GS_LINESTRIP || prim == GS_TRIANGLESTRIP)
+		m_parse_stats.k_strip++;
+#endif
+
+	if (auto_flush && skip == 0 && idx_buff.tail > 0 && ((vtx_buff.tail + 1) - vtx_buff.head) >= n)
+	{
+		HandleAutoFlush<prim>();
+	}
+
+	if (c.flush_epoch != m_kick_flush_epoch)
+		KickFastRefresh(c);
+
+	u32 head = vtx_buff.head;
+	u32 tail = vtx_buff.tail;
+	u32 next = vtx_buff.next;
+	u32 xy_tail = vtx_buff.xy_tail;
+
+	if (c.z_mode == 1)
+		m_v.XYZ.Z = ((m_v.XYZ.Z >> 8) & ~0xFF) | (m_v.XYZ.Z & 0xFF);
+	else if (c.z_mode == 2)
+		m_v.XYZ.Z &= 0x00FFFFFF;
+
+	// callers should write XYZUVF to m_v.m[1] in one piece to have this load store-forwarded, either by the cpu or the compiler when this function is inlined
+
+	const GSVector4i new_v0(m_v.m[0]);
+	const GSVector4i new_v1(m_v.m[1]);
+
+	GSVector4i* RESTRICT tailptr = (GSVector4i*)&vtx_buff.buff[tail];
+
+	tailptr[0] = new_v0;
+	tailptr[1] = new_v1;
+
+	// We maintain the X/Y coordinates for the last 4 vertices, as well as the head for triangle fans, so we can compute
+	// the min/max, and cull degenerate triangles, which saves draws in some cases. Why 4? Mod 4 is cheaper than Mod 3.
+	const GSVector4i xy = new_v1.xxxx().u16to32().sub32(m_xyof);
+	vtx_buff.xy[xy_tail & 3] = xy;
+
+	// Backup head for triangle fans so we can read it later, otherwise it'll get lost after the 4th vertex.
+	if (prim == GS_TRIANGLEFAN && tail == head)
+		vtx_buff.xyhead = xy;
+
+	vtx_buff.tail = ++tail;
+	vtx_buff.xy_tail = ++xy_tail;
+
+	const u32 m = tail - head;
+
+	if (m < n)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_short++;
+#endif
+		return;
+	}
+
+	// Skip draws when scissor is out of range (i.e. bottom-right is less than top-left), since everything will get clipped.
+#if GS_PARSE_STATS
+	m_parse_stats.k_full++;
+	if (c.scissor_invalid)
+		m_parse_stats.k_scissor_invalid++;
+#endif
+	skip |= static_cast<u32>(c.scissor_invalid);
+
+	GSVector4i bbox;
+	if (skip == 0)
+	{
+		const GSVector4i v0 = vtx_buff.xy[(xy_tail - 1) & 3];
+		const GSVector4i v1 = vtx_buff.xy[(xy_tail - 2) & 3];
+		const GSVector4i v2 = (prim == GS_TRIANGLEFAN) ? vtx_buff.xyhead : vtx_buff.xy[(xy_tail - 3) & 3];
+
+		if constexpr (n == 1)
+		{
+			bbox = v0;
+		}
+		else if constexpr (n == 2)
+		{
+			bbox = v0.runion(v1);
+		}
+		else if constexpr (n == 3)
+		{
+			bbox = v0.runion(v1).runion(v2);
+		}
+
+		if constexpr (primclass == GS_TRIANGLE_CLASS || primclass == GS_SPRITE_CLASS)
+		{
+			if (c.nativeres)
+			{
+				// For triangles and sprites at native res take the interior pixel centers.
+				const GSVector4i interior = (bbox + GSVector4i(0xF, 0xF, -1, -1)) & GSVector4i(~0xF);
+				bbox = interior + GSVector4i(0, 0, 1, 1); // +1 to bottom/right so empty test works correctly.
+			}
+			else
+			{
+				// For upscaling, remove bottom/right subtexels.
+				bbox -= ((bbox & GSVector4i(0xF)) == GSVector4i(0)) & GSVector4i(0, 0, 1, 1);
+			}
+
+			// For AA1 triangles and lines, expand the bounds by 1 pixel on all sides.
+			// Note: redundant check for the AA1 flag to avoid calling a function if not needed.
+			if (c.aa1_expand)
+			{
+				bbox += GSVector4i(-0x10, -0x10, 0x10, 0x10);
+			}
+		}
+
+		// Do scissor test.
+		const GSVector4i bbox_ex = bbox + GSVector4i(0, 0, 1, 1); // Exclusive coords for the scissor test.
+		const GSVector4i& scissor = c.scissor_cull;
+#if GS_PARSE_STATS
+		const u32 cull_scissor = static_cast<u32>(!bbox_ex.rintersects(scissor));
+		m_parse_stats.k_cull_scissor += cull_scissor;
+		u32 test = cull_scissor;
+#else
+		u32 test = static_cast<u32>(!bbox_ex.rintersects(scissor));
+#endif
+
+		// Test for empty bbox.
+		if constexpr (primclass == GS_TRIANGLE_CLASS || primclass == GS_SPRITE_CLASS)
+		{
+#if GS_PARSE_STATS
+			const u32 cull_empty = static_cast<u32>(bbox.rempty());
+			m_parse_stats.k_cull_empty += cull_empty;
+			test |= cull_empty;
+#else
+			test |= static_cast<u32>(bbox.rempty());
+#endif
+		}
+
+		// Test for degenerate triangle.
+		if constexpr (primclass == GS_TRIANGLE_CLASS)
+		{
+#if GS_PARSE_STATS
+			const u32 cull_degen = static_cast<u32>(v0.eq(v1)) | static_cast<u32>(v1.eq(v2)) | static_cast<u32>(v0.eq(v2));
+			m_parse_stats.k_cull_degen += cull_degen;
+			test |= cull_degen;
+#else
+			test |= static_cast<u32>(v0.eq(v1)) | static_cast<u32>(v1.eq(v2)) | static_cast<u32>(v0.eq(v2));
+#endif
+		}
+
+		skip |= test;
+	}
+
+	if (skip != 0)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_skipped++;
+		if constexpr (prim == GS_LINESTRIP || prim == GS_TRIANGLESTRIP)
+			m_parse_stats.k_strip_skipped++;
+#endif
+		switch (prim)
+		{
+			case GS_POINTLIST:
+			case GS_LINELIST:
+			case GS_TRIANGLELIST:
+			case GS_SPRITE:
+				vtx_buff.tail = head; // no need to check or grow the buffer length
+				break;
+			case GS_LINESTRIP:
+			case GS_TRIANGLESTRIP:
+				vtx_buff.head = head + 1;
+				[[fallthrough]];
+			case GS_TRIANGLEFAN:
+				if (tail >= m_max_vertex_count)
+				{
+#if GS_PARSE_STATS
+					m_parse_stats.k_grow++;
+#endif
+					GrowVertexBuffer(); // in case too many vertices were skipped
+				}
+				break;
+			default:
+				ASSUME(0);
+		}
+
+		return;
+	}
+
+	if (idx_buff.tail == 0 /* && ((m_backed_up_ctx != m_env.PRIM.CTXT) || m_dirty_gs_regs)*/)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_ctx_backup++;
+#endif
+		const int ctx = m_env.PRIM.CTXT;
+		std::memcpy(&m_prev_env, &m_env, 88);
+		std::memcpy(&m_prev_env.CTXT[ctx], &m_env.CTXT[ctx], 96);
+		std::memcpy(&m_prev_env.CTXT[ctx].offset, &m_env.CTXT[ctx].offset, sizeof(m_env.CTXT[ctx].offset));
+		std::memcpy(&m_prev_env.CTXT[ctx].scissor, &m_env.CTXT[ctx].scissor, sizeof(m_env.CTXT[ctx].scissor));
+		m_dirty_gs_regs = 0;
+		m_backed_up_ctx = m_env.PRIM.CTXT;
+	}
+
+	if (tail >= m_max_vertex_count)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_grow++;
+#endif
+		GrowVertexBuffer();
+	}
+
+	u16* RESTRICT buff = &idx_buff.buff[idx_buff.tail];
+
+	switch (prim)
+	{
+		case GS_POINTLIST:
+			buff[0] = static_cast<u16>(head + 0);
+			vtx_buff.head = head + 1;
+			vtx_buff.next = head + 1;
+			idx_buff.tail += 1;
+			break;
+		case GS_LINELIST:
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(head + 1);
+			vtx_buff.head = head + 2;
+			vtx_buff.next = head + 2;
+			idx_buff.tail += 2;
+			break;
+		case GS_LINESTRIP:
+			if (next < head)
+			{
+				vtx_buff.buff[next + 0] = vtx_buff.buff[head + 0];
+				vtx_buff.buff[next + 1] = vtx_buff.buff[head + 1];
+				head = next;
+				vtx_buff.tail = next + 2;
+			}
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(head + 1);
+			vtx_buff.head = head + 1;
+			vtx_buff.next = head + 2;
+			idx_buff.tail += 2;
+			break;
+		case GS_TRIANGLELIST:
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(head + 1);
+			buff[2] = static_cast<u16>(head + 2);
+			vtx_buff.head = head + 3;
+			vtx_buff.next = head + 3;
+			idx_buff.tail += 3;
+			break;
+		case GS_TRIANGLESTRIP:
+			if (next < head)
+			{
+				vtx_buff.buff[next + 0] = vtx_buff.buff[head + 0];
+				vtx_buff.buff[next + 1] = vtx_buff.buff[head + 1];
+				vtx_buff.buff[next + 2] = vtx_buff.buff[head + 2];
+				head = next;
+				vtx_buff.tail = next + 3;
+			}
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(head + 1);
+			buff[2] = static_cast<u16>(head + 2);
+			vtx_buff.head = head + 1;
+			vtx_buff.next = head + 3;
+			idx_buff.tail += 3;
+			break;
+		case GS_TRIANGLEFAN:
+			// TODO: remove gaps, next == head && head < tail - 3 || next > head && next < tail - 2 (very rare)
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(tail - 2);
+			buff[2] = static_cast<u16>(tail - 1);
+			vtx_buff.next = tail;
+			idx_buff.tail += 3;
+			break;
+		case GS_SPRITE:
+			buff[0] = static_cast<u16>(head + 0);
+			buff[1] = static_cast<u16>(head + 1);
+
+			// Update the first vert's Q for ease of doing Autoflush
+			if (!m_env.PRIM.FST)
+				vtx_buff.buff[buff[0]].RGBAQ.Q = vtx_buff.buff[buff[1]].RGBAQ.Q;
+
+			vtx_buff.head = head + 2;
+			vtx_buff.next = head + 2;
+			idx_buff.tail += 2;
+			break;
+		default:
+			ASSUME(0);
+	}
+
+	// Update rectangle for the current draw. Needs exclusive endpoints.
+	const GSVector4i draw_rect = bbox.sra32<4>() + GSVector4i(0, 0, 1, 1);
+	if (idx_buff.tail != n)
+		temp_draw_rect = temp_draw_rect.runion(draw_rect);
+	else
+		temp_draw_rect = draw_rect;
+	temp_draw_rect = temp_draw_rect.rintersect(c.scissor_in);
+
+	constexpr u32 max_vertices = MaxVerticesForPrim(prim);
+	if (max_vertices != 0 && vtx_buff.tail >= max_vertices)
+		Flush(VERTEXCOUNT);
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	KickRunConsts c;
+	KickFastRefresh(c);
+
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero()); // see GIFPackedRegHandlerSTQ
+
+		m_v.m[0] = st.upl64(rgba.upl32(q)); // TODO: only store the last one
+
+		GSVector4i xy = GSVector4i::loadl(&r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
+
+		VertexKickFast<prim, auto_flush>(r[2].XYZF2.Skip(), c);
+
+		r += 3;
+	}
+
+	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
+}
+#endif
 
 /// Checks if region repeat is used (applying it does something to at least one of the values in min...max)
 /// Also calculates the real min and max values seen after applying the region repeat to all values in min...max
