@@ -35,9 +35,9 @@
 // at the end of the run. Ships 0. Changes where draws are split, never what is drawn.
 #define GS_KICK_VERIFY_FORCE_FLUSH 0
 // C111: packed STQ/RGBA/XYZF2 runs evaluate VertexKick's vertex-independent tests once per run (VertexKickFast).
-// Ships 0 until the differential check and the A/B pass. Defined only here.
+// Ships 0 until the differential check and the A/B pass; needs proper testing. Defined only here.
+// VertexKickFast mirrors VertexKick, so keep them in step.
 #define GS_KICK_FAST 0
-
 
 #if GS_KICK_VERIFY
 #include <chrono>
@@ -334,9 +334,10 @@ protected:
 		u8 z_mode; // 0: no 24-bit depth change, 1: PrioritizeUpper, 2: PrioritizeLower
 		bool scissor_invalid;
 		bool nativeres;
-		bool aa1_expand;
+		u8 aa1_state; // 0: not evaluated since the last refresh, 1: false, 2: true
 	};
 	void KickFastRefresh(KickRunConsts& c);
+	bool KickFastCoverageAlpha(KickRunConsts& c);
 	template <u32 prim, bool auto_flush> void VertexKickFast(u32 skip, KickRunConsts& c);
 	template <u32 prim, bool auto_flush> void KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size);
 #endif

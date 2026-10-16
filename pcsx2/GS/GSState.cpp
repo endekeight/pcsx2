@@ -1830,7 +1830,7 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
 #if GS_KICK_FAST
-	KickRunConsts c;
+	KickRunConsts c{};
 	KickFastRefresh(c);
 #endif
 
@@ -1855,7 +1855,10 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 		m_v.m[1] = xy.upl32(zf); // TODO: only store the last one
 
 #if GS_KICK_FAST
-		VertexKickFast<prim, auto_flush>(r[2].XYZF2.Skip(), c);
+		if (!GSConfig.UserHacks_DrawBuffering)
+			VertexKickFast<prim, auto_flush>(r[2].XYZF2.Skip(), c);
+		else
+			VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
 #else
 		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
 #endif
@@ -6774,10 +6777,20 @@ void GSState::KickFastRefresh(KickRunConsts& c)
 	}
 	c.scissor_invalid = m_scissor_invalid;
 	c.nativeres = m_nativeres;
-	c.aa1_expand = PRIM->AA1 && IsCoverageAlphaSupported();
+	c.aa1_state = 0;
 	c.flush_epoch = m_kick_flush_epoch;
 }
 
+bool GSState::KickFastCoverageAlpha(KickRunConsts& c)
+{
+	if (c.aa1_state == 0)
+		c.aa1_state = IsCoverageAlphaSupported() ? 2 : 1;
+	return c.aa1_state == 2;
+}
+
+// C111: VertexKickFast is a copy of VertexKick that reads the run-invariant tests from
+// KickRunConsts. Any change to VertexKick must be mirrored here; the GS_KICK_VERIFY check
+// compares the two on the device.
 template <u32 prim, bool auto_flush>
 __forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
 {
@@ -6898,7 +6911,7 @@ __forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
 
 			// For AA1 triangles and lines, expand the bounds by 1 pixel on all sides.
 			// Note: redundant check for the AA1 flag to avoid calling a function if not needed.
-			if (c.aa1_expand)
+			if (PRIM->AA1 && KickFastCoverageAlpha(c))
 			{
 				bbox += GSVector4i(-0x10, -0x10, 0x10, 0x10);
 			}
@@ -7094,7 +7107,7 @@ __forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
 template <u32 prim, bool auto_flush>
 void GSState::KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size)
 {
-	KickRunConsts c;
+	KickRunConsts c{};
 	KickFastRefresh(c);
 
 	const GIFPackedReg* RESTRICT r_end = r + size;
