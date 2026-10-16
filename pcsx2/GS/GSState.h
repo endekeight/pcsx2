@@ -213,6 +213,7 @@ protected:
 		std::vector<GSVertex> vtx;
 		std::vector<u16> idx;
 		u32 reason = 0; // a GSFlushReason value; stored as u32 because the enum is declared later in the class
+		u32 max_vertex_count = 0;
 	};
 	struct KickVerify
 	{
@@ -230,6 +231,8 @@ protected:
 		std::vector<KickVerifySnap> post;
 		u32 pre_used = 0, post_used = 0;
 		u64 runs = 0, verified = 0, kicks = 0, flush_runs = 0, flushes = 0, drawbuf_skipped = 0, nested = 0;
+		u64 grow_runs = 0, mm_grow = 0;
+		u64 kicks_unverified = 0;
 		u64 mismatch_runs = 0;
 		u64 mm_fields = 0, mm_prev_env = 0, mm_vtx = 0, mm_idx = 0, mm_flush_count = 0, mm_flush_reason = 0;
 		u64 details = 0;

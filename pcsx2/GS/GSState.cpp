@@ -1556,6 +1556,8 @@ void GSState::KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u
 
 	std::memcpy(&s.prev_env, &m_prev_env, sizeof(m_prev_env));
 
+	s.max_vertex_count = m_max_vertex_count;
+
 	const u32 vcap = m_max_vertex_count + 3;
 	const u32 icap = (m_max_vertex_count + 3) * 6;
 
@@ -1781,7 +1783,7 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
 
 #if GS_KICK_VERIFY_MUTATE
-	if ((m_kv.verified & 255) == 0)
+	if (m_kv.recording && (m_kv.verified & 255) == 0)
 		m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
 #endif
 }
@@ -1841,12 +1843,21 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 	m_kv.run_mismatch = false;
 	m_kv.pre_used = 0;
 	m_kv.post_used = 0;
-	const u32 vb = std::min(m_vertex->head, m_vertex->next);
-	const u32 ib = m_index->tail;
+	// Also cover a guard band below the run's first writable slot, so a path that writes into
+	// earlier vertices or indices of the open draw is caught. 64 vertices, 192 indices.
+	const u32 vlo = std::min(m_vertex->head, m_vertex->next);
+	const u32 vb = (vlo > 64) ? (vlo - 64) : 0;
+	const u32 ib = (m_index->tail > 192) ? (m_index->tail - 192) : 0;
 	KickVerifyCapture(m_kv.s0, vb, m_vertex->tail + n + 3, ib, m_index->tail + 3 * n + 3);
 	m_kv.recording = true;
 	KickVerifyLiveLoop<prim, auto_flush>(r, size);
 	m_kv.recording = false;
+	if (m_max_vertex_count != m_kv.s0.max_vertex_count)
+	{
+		m_kv.grow_runs++;
+		m_kv.kicks_unverified += n;
+		return;
+	}
 	const bool flushed = m_kv.pre_used != 0;
 	if (!flushed)
 		KickVerifyCapture(m_kv.end, m_kv.s0.vtx_begin, m_kv.s0.vtx_end, m_kv.s0.idx_begin, m_kv.s0.idx_end);
@@ -1866,7 +1877,19 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 	KickVerifyReferenceLoop<prim, auto_flush>(r, size);
 	m_kv.replaying = false;
 	bool ok = true;
-	if (m_kv.replay_abort || m_kv.replay_flush != m_kv.pre_used)
+	if (m_max_vertex_count != m_kv.s0.max_vertex_count)
+	{
+		m_kv.mm_grow++;
+		m_kv.run_mismatch = true;
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=end k=0 class=grow prim=%u n=%u",
+				static_cast<unsigned long long>(m_kv.verified), m_kv.run_prim, m_kv.run_n);
+			m_kv.details++;
+		}
+		ok = false;
+	}
+	else if (m_kv.replay_abort || m_kv.replay_flush != m_kv.pre_used)
 	{
 		if (!m_kv.replay_abort)
 			m_kv.mm_flush_count++;
@@ -2691,11 +2714,27 @@ void GSState::Flush(GSFlushReason reason)
 		if (k >= m_kv.pre_used)
 		{
 			m_kv.mm_flush_count++;
+			m_kv.run_mismatch = true;
+			if (m_kv.details < 20)
+			{
+				Console.WriteLn("GSKVDIFF: run=%llu point=flush k=%u class=flush_extra prim=%u n=%u",
+					static_cast<unsigned long long>(m_kv.verified), k, m_kv.run_prim, m_kv.run_n);
+				m_kv.details++;
+			}
 			m_kv.replay_abort = true;
 			return;
 		}
 		if (static_cast<u32>(reason) != m_kv.pre[k].reason)
+		{
 			m_kv.mm_flush_reason++;
+			m_kv.run_mismatch = true;
+			if (m_kv.details < 20)
+			{
+				Console.WriteLn("GSKVDIFF: run=%llu point=flush k=%u class=flush_reason prim=%u n=%u live_reason=%u ref_reason=%u",
+					static_cast<unsigned long long>(m_kv.verified), k, m_kv.run_prim, m_kv.run_n, m_kv.pre[k].reason, static_cast<u32>(reason));
+				m_kv.details++;
+			}
+		}
 		KickVerifyCapture(m_kv.ref, m_kv.pre[k].vtx_begin, m_kv.pre[k].vtx_end, m_kv.pre[k].idx_begin, m_kv.pre[k].idx_end);
 		KickVerifyCompare(m_kv.pre[k], m_kv.ref, "flush", k);
 		KickVerifyRestore(m_kv.post[k]);
