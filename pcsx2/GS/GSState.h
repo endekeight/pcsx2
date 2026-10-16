@@ -38,6 +38,12 @@
 // Ships 0 until the differential check and the A/B pass; needs proper testing. Defined only here.
 // VertexKickFast mirrors VertexKick, so keep them in step.
 #define GS_KICK_FAST 0
+// C111 lever (c): VertexKickFast computes the scissor, empty and degenerate cull tests as one lane
+// mask with one reduction. Requires GS_KICK_FAST. Ships 0; needs proper testing. Defined only here.
+#define GS_KICK_FAST_CULL 0
+#if GS_KICK_FAST_CULL && !GS_KICK_FAST
+#error GS_KICK_FAST_CULL requires GS_KICK_FAST
+#endif
 
 #if GS_KICK_VERIFY
 #include <chrono>

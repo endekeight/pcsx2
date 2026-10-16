@@ -6,6 +6,9 @@
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
+#if GS_KICK_FAST_CULL
+#include "GS/GSKickCull.h"
+#endif
 
 #include "common/Console.h"
 #include "common/BitUtils.h"
@@ -6917,6 +6920,7 @@ __forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
 			}
 		}
 
+#if !GS_KICK_FAST_CULL || GS_PARSE_STATS
 		// Do scissor test.
 		const GSVector4i bbox_ex = bbox + GSVector4i(0, 0, 1, 1); // Exclusive coords for the scissor test.
 		const GSVector4i& scissor = c.scissor_cull;
@@ -6953,6 +6957,9 @@ __forceinline void GSState::VertexKickFast(u32 skip, KickRunConsts& c)
 		}
 
 		skip |= test;
+#else
+		skip |= GSKickCullMask<primclass>(bbox, c.scissor_cull, v0, v1, v2);
+#endif
 	}
 
 	if (skip != 0)

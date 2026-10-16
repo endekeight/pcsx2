@@ -3,6 +3,7 @@ add_pcsx2_test(core_test
 	vtlb_unmapped_phy_tests.cpp
 	GS/texture_block_index_tests.cpp
 	GS/sw_texture_buffer_tests.cpp
+	GS/kick_cull_tests.cpp
 	MockMemoryInterface.h
 	StubHost.cpp
 )
