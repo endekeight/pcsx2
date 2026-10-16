@@ -5894,11 +5894,25 @@ __forceinline void GSState::VertexKick(u32 skip)
 	m_parse_stats.kicks++;
 	if constexpr (auto_flush)
 		m_parse_stats.af_kicks++;
+	if (skip != 0)
+		m_parse_stats.k_caller_skip++;
+	if constexpr (prim == GS_LINESTRIP || prim == GS_TRIANGLESTRIP)
+		m_parse_stats.k_strip++;
 #endif
 
 	if (GSConfig.UserHacks_DrawBuffering)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_overlap_checks++;
+#endif
 		if (CheckOverlapVerts(n))
+		{
+#if GS_PARSE_STATS
+			m_parse_stats.k_overlap_flushes++;
+#endif
 			Flush(CONTEXTCHANGE);
+		}
+	}
 	
 	if (auto_flush && skip == 0 && idx_buff.tail > 0 && ((vtx_buff.tail + 1) - vtx_buff.head) >= n)
 	{
@@ -5943,9 +5957,19 @@ __forceinline void GSState::VertexKick(u32 skip)
 	const u32 m = tail - head;
 
 	if (m < n)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_short++;
+#endif
 		return;
+	}
 
 	// Skip draws when scissor is out of range (i.e. bottom-right is less than top-left), since everything will get clipped.
+#if GS_PARSE_STATS
+	m_parse_stats.k_full++;
+	if (m_scissor_invalid)
+		m_parse_stats.k_scissor_invalid++;
+#endif
 	skip |= static_cast<u32>(m_scissor_invalid);
 
 	GSVector4i bbox;
@@ -5993,18 +6017,36 @@ __forceinline void GSState::VertexKick(u32 skip)
 		// Do scissor test.
 		const GSVector4i bbox_ex = bbox + GSVector4i(0, 0, 1, 1); // Exclusive coords for the scissor test.
 		const GSVector4i& scissor = m_context->scissor.cull;
+#if GS_PARSE_STATS
+		const u32 cull_scissor = static_cast<u32>(!bbox_ex.rintersects(scissor));
+		m_parse_stats.k_cull_scissor += cull_scissor;
+		u32 test = cull_scissor;
+#else
 		u32 test = static_cast<u32>(!bbox_ex.rintersects(scissor));
+#endif
 
 		// Test for empty bbox.
 		if constexpr (primclass == GS_TRIANGLE_CLASS || primclass == GS_SPRITE_CLASS)
 		{
+#if GS_PARSE_STATS
+			const u32 cull_empty = static_cast<u32>(bbox.rempty());
+			m_parse_stats.k_cull_empty += cull_empty;
+			test |= cull_empty;
+#else
 			test |= static_cast<u32>(bbox.rempty());
+#endif
 		}
 
 		// Test for degenerate triangle.
 		if constexpr (primclass == GS_TRIANGLE_CLASS)
 		{
+#if GS_PARSE_STATS
+			const u32 cull_degen = static_cast<u32>(v0.eq(v1)) | static_cast<u32>(v1.eq(v2)) | static_cast<u32>(v0.eq(v2));
+			m_parse_stats.k_cull_degen += cull_degen;
+			test |= cull_degen;
+#else
 			test |= static_cast<u32>(v0.eq(v1)) | static_cast<u32>(v1.eq(v2)) | static_cast<u32>(v0.eq(v2));
+#endif
 		}
 
 		skip |= test;
@@ -6012,6 +6054,11 @@ __forceinline void GSState::VertexKick(u32 skip)
 
 	if (skip != 0)
 	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_skipped++;
+		if constexpr (prim == GS_LINESTRIP || prim == GS_TRIANGLESTRIP)
+			m_parse_stats.k_strip_skipped++;
+#endif
 		switch (prim)
 		{
 			case GS_POINTLIST:
@@ -6026,7 +6073,12 @@ __forceinline void GSState::VertexKick(u32 skip)
 				[[fallthrough]];
 			case GS_TRIANGLEFAN:
 				if (tail >= m_max_vertex_count)
+				{
+#if GS_PARSE_STATS
+					m_parse_stats.k_grow++;
+#endif
 					GrowVertexBuffer(); // in case too many vertices were skipped
+				}
 				break;
 			default:
 				ASSUME(0);
@@ -6037,6 +6089,9 @@ __forceinline void GSState::VertexKick(u32 skip)
 
 	if (idx_buff.tail == 0 /* && ((m_backed_up_ctx != m_env.PRIM.CTXT) || m_dirty_gs_regs)*/)
 	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_ctx_backup++;
+#endif
 		const int ctx = m_env.PRIM.CTXT;
 		std::memcpy(&m_prev_env, &m_env, 88);
 		std::memcpy(&m_prev_env.CTXT[ctx], &m_env.CTXT[ctx], 96);
@@ -6050,7 +6105,12 @@ __forceinline void GSState::VertexKick(u32 skip)
 	}
 
 	if (tail >= m_max_vertex_count)
+	{
+#if GS_PARSE_STATS
+		m_parse_stats.k_grow++;
+#endif
 		GrowVertexBuffer();
+	}
 
 	u16* RESTRICT buff = &idx_buff.buff[idx_buff.tail];
 

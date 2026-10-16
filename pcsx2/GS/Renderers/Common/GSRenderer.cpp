@@ -606,6 +606,21 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			static_cast<unsigned long long>(m_parse_stats.stq_verts),
 			static_cast<unsigned long long>(m_parse_stats.cf_calls),
 			static_cast<unsigned long long>(m_parse_stats.cf_flushes));
+		Console.WriteLn("GSKICK: k_caller_skip=%llu k_overlap_checks=%llu k_overlap_flushes=%llu k_short=%llu k_full=%llu k_scissor_invalid=%llu k_cull_scissor=%llu k_cull_empty=%llu k_cull_degen=%llu k_skipped=%llu k_strip=%llu k_strip_skipped=%llu k_grow=%llu k_ctx_backup=%llu",
+			static_cast<unsigned long long>(m_parse_stats.k_caller_skip),
+			static_cast<unsigned long long>(m_parse_stats.k_overlap_checks),
+			static_cast<unsigned long long>(m_parse_stats.k_overlap_flushes),
+			static_cast<unsigned long long>(m_parse_stats.k_short),
+			static_cast<unsigned long long>(m_parse_stats.k_full),
+			static_cast<unsigned long long>(m_parse_stats.k_scissor_invalid),
+			static_cast<unsigned long long>(m_parse_stats.k_cull_scissor),
+			static_cast<unsigned long long>(m_parse_stats.k_cull_empty),
+			static_cast<unsigned long long>(m_parse_stats.k_cull_degen),
+			static_cast<unsigned long long>(m_parse_stats.k_skipped),
+			static_cast<unsigned long long>(m_parse_stats.k_strip),
+			static_cast<unsigned long long>(m_parse_stats.k_strip_skipped),
+			static_cast<unsigned long long>(m_parse_stats.k_grow),
+			static_cast<unsigned long long>(m_parse_stats.k_ctx_backup));
 		m_parse_stats.kicks = 0;
 		m_parse_stats.af_kicks = 0;
 		m_parse_stats.af_checks = 0;
@@ -617,6 +632,20 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_parse_stats.stq_verts = 0;
 		m_parse_stats.cf_calls = 0;
 		m_parse_stats.cf_flushes = 0;
+		m_parse_stats.k_caller_skip = 0;
+		m_parse_stats.k_overlap_checks = 0;
+		m_parse_stats.k_overlap_flushes = 0;
+		m_parse_stats.k_short = 0;
+		m_parse_stats.k_full = 0;
+		m_parse_stats.k_scissor_invalid = 0;
+		m_parse_stats.k_cull_scissor = 0;
+		m_parse_stats.k_cull_empty = 0;
+		m_parse_stats.k_cull_degen = 0;
+		m_parse_stats.k_skipped = 0;
+		m_parse_stats.k_strip = 0;
+		m_parse_stats.k_strip_skipped = 0;
+		m_parse_stats.k_grow = 0;
+		m_parse_stats.k_ctx_backup = 0;
 		m_parse_stats.vsyncs = 0;
 		m_parse_stats.last = now;
 	}
