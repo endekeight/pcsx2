@@ -1536,6 +1536,19 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 }
 
 #if GS_KICK_VERIFY
+u64 GSState::KickVerifyHash(const GIFPackedReg* r, u32 size)
+{
+	const u8* bytes = reinterpret_cast<const u8*>(r);
+	const size_t total_bytes = size * sizeof(GIFPackedReg);
+	u64 hash = 14695981039346656037ull;
+	for (size_t i = 0; i < total_bytes; ++i)
+	{
+		hash ^= static_cast<u64>(bytes[i]);
+		hash *= 1099511628211ull;
+	}
+	return hash;
+}
+
 void GSState::KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u32 idx_begin, u32 idx_end)
 {
 	std::memset(&s.f, 0, sizeof(s.f));
@@ -1661,20 +1674,48 @@ bool GSState::KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap
 
 	bool vtx_diff = false;
 	u32 first_vtx = 0;
+	u32 word = 0;
+	u32 live_word = 0;
+	u32 ref_word = 0;
+	u32 vtx_count = 0;
 	if (live.vtx.size() != ref.vtx.size())
 	{
 		vtx_diff = true;
 		first_vtx = live.vtx_begin + static_cast<u32>(std::min(live.vtx.size(), ref.vtx.size()));
+		const size_t min_sz = std::min(live.vtx.size(), ref.vtx.size());
+		for (size_t i = 0; i < min_sz; ++i)
+		{
+			if (std::memcmp(&live.vtx[i], &ref.vtx[i], sizeof(GSVertex)) != 0)
+				vtx_count++;
+		}
+		vtx_count += static_cast<u32>(std::max(live.vtx.size(), ref.vtx.size()) - min_sz);
 	}
 	else if (!live.vtx.empty() && std::memcmp(live.vtx.data(), ref.vtx.data(), live.vtx.size() * sizeof(GSVertex)) != 0)
 	{
 		vtx_diff = true;
+		bool found_first = false;
 		for (size_t i = 0; i < live.vtx.size(); ++i)
 		{
 			if (std::memcmp(&live.vtx[i], &ref.vtx[i], sizeof(GSVertex)) != 0)
 			{
-				first_vtx = live.vtx_begin + static_cast<u32>(i);
-				break;
+				if (!found_first)
+				{
+					first_vtx = live.vtx_begin + static_cast<u32>(i);
+					found_first = true;
+					const u32* lw = reinterpret_cast<const u32*>(&live.vtx[i]);
+					const u32* rw = reinterpret_cast<const u32*>(&ref.vtx[i]);
+					for (u32 w = 0; w < 8; ++w)
+					{
+						if (lw[w] != rw[w])
+						{
+							word = w;
+							live_word = lw[w];
+							ref_word = rw[w];
+							break;
+						}
+					}
+				}
+				vtx_count++;
 			}
 		}
 	}
@@ -1684,29 +1725,51 @@ bool GSState::KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap
 		m_kv.mm_vtx++;
 		if (m_kv.details < 20)
 		{
-			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u",
-				static_cast<unsigned long long>(m_kv.verified), point, k, "vtx", m_kv.run_prim, m_kv.run_n, first_vtx);
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u vtx_begin=%u vtx_end=%u live_tail=%u ref_tail=%u word=%u live_word=%08x ref_word=%08x count=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "vtx", m_kv.run_prim, m_kv.run_n, first_vtx,
+				live.vtx_begin, live.vtx_end, live.f.tail, ref.f.tail, word, live_word, ref_word, vtx_count);
 			m_kv.details++;
 		}
 	}
 
 	bool idx_diff = false;
 	u32 first_idx = 0;
+	u32 live_val = 0;
+	u32 ref_val = 0;
+	u32 idx_count = 0;
 	if (live.idx.size() != ref.idx.size())
 	{
 		idx_diff = true;
 		first_idx = live.idx_begin + static_cast<u32>(std::min(live.idx.size(), ref.idx.size()));
+		const size_t min_sz = std::min(live.idx.size(), ref.idx.size());
+		for (size_t i = 0; i < min_sz; ++i)
+		{
+			if (live.idx[i] != ref.idx[i])
+				idx_count++;
+		}
+		idx_count += static_cast<u32>(std::max(live.idx.size(), ref.idx.size()) - min_sz);
 	}
 	else if (!live.idx.empty() && std::memcmp(live.idx.data(), ref.idx.data(), live.idx.size() * sizeof(u16)) != 0)
 	{
 		idx_diff = true;
+		bool found_first = false;
 		for (size_t i = 0; i < live.idx.size(); ++i)
 		{
 			if (live.idx[i] != ref.idx[i])
 			{
-				first_idx = live.idx_begin + static_cast<u32>(i);
-				break;
+				if (!found_first)
+				{
+					first_idx = live.idx_begin + static_cast<u32>(i);
+					found_first = true;
+				}
+				idx_count++;
 			}
+		}
+		if (first_idx >= live.idx_begin && (first_idx - live.idx_begin) < live.idx.size() &&
+			first_idx >= ref.idx_begin && (first_idx - ref.idx_begin) < ref.idx.size())
+		{
+			live_val = live.idx[first_idx - live.idx_begin];
+			ref_val = ref.idx[first_idx - ref.idx_begin];
 		}
 	}
 	if (idx_diff)
@@ -1715,8 +1778,9 @@ bool GSState::KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap
 		m_kv.mm_idx++;
 		if (m_kv.details < 20)
 		{
-			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u",
-				static_cast<unsigned long long>(m_kv.verified), point, k, "idx", m_kv.run_prim, m_kv.run_n, first_idx);
+			Console.WriteLn("GSKVDIFF: run=%llu point=%s k=%u class=%s prim=%u n=%u first=%u idx_begin=%u idx_end=%u live_idx_tail=%u ref_idx_tail=%u live_val=%u ref_val=%u s0_idx_tail=%u live_head=%u live_tail=%u count=%u",
+				static_cast<unsigned long long>(m_kv.verified), point, k, "idx", m_kv.run_prim, m_kv.run_n, first_idx,
+				live.idx_begin, live.idx_end, live.f.idx_tail, ref.f.idx_tail, live_val, ref_val, m_kv.s0.f.idx_tail, live.f.head, live.f.tail, idx_count);
 			m_kv.details++;
 		}
 	}
@@ -1837,6 +1901,7 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 		KickVerifyLiveLoop<prim, auto_flush>(r, size);
 		return;
 	}
+	const u64 pkt_before = KickVerifyHash(r, size);
 	const u32 n = size / 3;
 	m_kv.run_n = n;
 	m_kv.run_prim = prim;
@@ -1876,6 +1941,18 @@ void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
 	m_kv.replay_flush = 0;
 	KickVerifyReferenceLoop<prim, auto_flush>(r, size);
 	m_kv.replaying = false;
+	const u64 pkt_after = KickVerifyHash(r, size);
+	if (pkt_before != pkt_after)
+	{
+		m_kv.mm_packet++;
+		m_kv.run_mismatch = true;
+		if (m_kv.details < 20)
+		{
+			Console.WriteLn("GSKVDIFF: run=%llu point=packet k=0 class=packet prim=%u n=%u",
+				static_cast<unsigned long long>(m_kv.verified), m_kv.run_prim, m_kv.run_n);
+			m_kv.details++;
+		}
+	}
 	bool ok = true;
 	if (m_max_vertex_count != m_kv.s0.max_vertex_count)
 	{

@@ -234,11 +234,12 @@ protected:
 		u64 grow_runs = 0, mm_grow = 0;
 		u64 kicks_unverified = 0;
 		u64 mismatch_runs = 0;
-		u64 mm_fields = 0, mm_prev_env = 0, mm_vtx = 0, mm_idx = 0, mm_flush_count = 0, mm_flush_reason = 0;
+		u64 mm_fields = 0, mm_prev_env = 0, mm_vtx = 0, mm_idx = 0, mm_flush_count = 0, mm_flush_reason = 0, mm_packet = 0;
 		u64 details = 0;
 		std::chrono::steady_clock::time_point last{};
 	};
 	KickVerify m_kv;
+	static u64 KickVerifyHash(const GIFPackedReg* r, u32 size);
 	void KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u32 idx_begin, u32 idx_end);
 	void KickVerifyRestore(const KickVerifySnap& s);
 	bool KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap& ref, const char* point, u32 k);
