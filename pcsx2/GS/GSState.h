@@ -94,9 +94,12 @@ private:
 
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
 #if GS_KICK_VERIFY
-	template <u32 prim, bool auto_flush> void KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size);
-	template <u32 prim, bool auto_flush> void KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size);
-	template <u32 prim, bool auto_flush> void KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush>
+	void KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush>
+	void KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush>
+	void KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size);
 #endif
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size);
 	void GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r, u32 size);
@@ -237,12 +240,12 @@ protected:
 		bool replay_abort = false;
 		bool run_mismatch = false;
 		bool force_flush = false;
-		u32 run_n = 0;          // vertices in the current run
+		u32 run_n = 0; // vertices in the current run
 		u32 run_prim = 0;
-		u32 replay_flush = 0;   // intercepted flushes so far in the current replay
+		u32 replay_flush = 0; // intercepted flushes so far in the current replay
 		KickVerifySnap s0;
 		KickVerifySnap end;
-		KickVerifySnap ref;     // scratch for the reference side
+		KickVerifySnap ref; // scratch for the reference side
 		std::vector<KickVerifySnap> pre;
 		std::vector<KickVerifySnap> post;
 		u32 pre_used = 0, post_used = 0;
@@ -344,8 +347,10 @@ protected:
 	};
 	void KickFastRefresh(KickRunConsts& c);
 	bool KickFastCoverageAlpha(KickRunConsts& c);
-	template <u32 prim, bool auto_flush> void VertexKickFast(u32 skip, KickRunConsts& c);
-	template <u32 prim, bool auto_flush> void KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size);
+	template <u32 prim, bool auto_flush>
+	void VertexKickFast(u32 skip, KickRunConsts& c);
+	template <u32 prim, bool auto_flush>
+	void KickFastLoop(const GIFPackedReg* RESTRICT r, u32 size);
 #endif
 
 	// following functions need m_vt to be initialized

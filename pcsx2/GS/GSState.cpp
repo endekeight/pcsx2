@@ -6474,7 +6474,7 @@ __forceinline void GSState::VertexKick(u32 skip)
 			Flush(CONTEXTCHANGE);
 		}
 	}
-	
+
 	if (auto_flush && skip == 0 && idx_buff.tail > 0 && ((vtx_buff.tail + 1) - vtx_buff.head) >= n)
 	{
 		HandleAutoFlush<prim>();

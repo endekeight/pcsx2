@@ -29,7 +29,7 @@ static void CheckRandom(u32 seed, int range, int count)
 		if (mask != ref)
 		{
 			EXPECT_EQ(GSKickCullMask<primclass>(bbox, scissor, v0, v1, v2),
-			          GSKickCullReference<primclass>(bbox, scissor, v0, v1, v2))
+				GSKickCullReference<primclass>(bbox, scissor, v0, v1, v2))
 				<< "case index: " << i;
 			if (++failures > 20)
 			{
@@ -76,7 +76,7 @@ TEST(GSKickCull, EdgeCases)
 		const GSVector4i v1(200, 200, 0, 0);
 		const GSVector4i v2(300, 300, 0, 0);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
 	}
 
 	// Box with x0 == x1
@@ -86,7 +86,7 @@ TEST(GSKickCull, EdgeCases)
 		const GSVector4i v1(200, 250, 0, 0);
 		const GSVector4i v2(200, 350, 0, 0);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
 	}
 
 	// Box fully outside the scissor
@@ -96,7 +96,7 @@ TEST(GSKickCull, EdgeCases)
 		const GSVector4i v1(700, 700, 0, 0);
 		const GSVector4i v2(800, 800, 0, 0);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
 	}
 
 	// Box touching the scissor edge (bbox x1 == scissor x0 - 1 and == scissor x0)
@@ -106,7 +106,7 @@ TEST(GSKickCull, EdgeCases)
 		const GSVector4i v1(70, 250, 0, 0);
 		const GSVector4i v2(99, 350, 0, 0);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
 	}
 	{
 		const GSVector4i bbox(50, 150, 100, 350);
@@ -114,7 +114,7 @@ TEST(GSKickCull, EdgeCases)
 		const GSVector4i v1(70, 250, 0, 0);
 		const GSVector4i v2(100, 350, 0, 0);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox, scissor, v0, v1, v2));
 	}
 
 	// INT_MAX / INT_MIN coordinates in the box
@@ -125,14 +125,14 @@ TEST(GSKickCull, EdgeCases)
 
 		const GSVector4i bbox_max(INT_MAX, INT_MAX, INT_MAX, INT_MAX);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox_max, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_max, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_max, scissor, v0, v1, v2));
 
 		const GSVector4i bbox_min(INT_MIN, INT_MIN, INT_MIN, INT_MIN);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox_min, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_min, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_min, scissor, v0, v1, v2));
 
 		const GSVector4i bbox_mix(INT_MIN, INT_MIN, INT_MAX, INT_MAX);
 		EXPECT_EQ(GSKickCullMask<GS_TRIANGLE_CLASS>(bbox_mix, scissor, v0, v1, v2),
-		          GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_mix, scissor, v0, v1, v2));
+			GSKickCullReference<GS_TRIANGLE_CLASS>(bbox_mix, scissor, v0, v1, v2));
 	}
 }
