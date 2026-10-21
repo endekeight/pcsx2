@@ -16,6 +16,10 @@
 #include "GS/GSBlendReasonStats.h"
 // B29: Holds the shader-blend reason of the draw being set up, or None. The GS thread draws one draw at a time.
 static std::uint32_t s_frame_cost_sb_reason = GSBlendReason::None;
+static_assert(GSPerfMon::SbReasonOther - GSPerfMon::SbReasonFetchForce + 1 == GSBlendReason::Count,
+	"SbReason counters must follow GSBlendReason::Reason order");
+static_assert(GSPerfMon::NeedsRtOther - GSPerfMon::NeedsRtFetchForce + 1 == GSBlendReason::Count,
+	"NeedsRt reason counters must follow GSBlendReason::Reason order");
 #endif
 
 // A17. Per-present histogram of what the hardware renderer's Draw() receives: textured
