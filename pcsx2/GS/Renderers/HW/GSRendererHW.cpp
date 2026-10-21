@@ -12,6 +12,16 @@
 #include "common/StringUtil.h"
 #include <bit>
 
+#if GS_FRAME_COST_STATS
+#include "GS/GSBlendReasonStats.h"
+// B29: Holds the shader-blend reason of the draw being set up, or None. The GS thread draws one draw at a time.
+static std::uint32_t s_frame_cost_sb_reason = GSBlendReason::None;
+static_assert(GSPerfMon::SbReasonOther - GSPerfMon::SbReasonFetchForce + 1 == GSBlendReason::Count,
+	"SbReason counters must follow GSBlendReason::Reason order");
+static_assert(GSPerfMon::NeedsRtOther - GSPerfMon::NeedsRtFetchForce + 1 == GSBlendReason::Count,
+	"NeedsRt reason counters must follow GSBlendReason::Reason order");
+#endif
+
 // A17. Per-present histogram of what the hardware renderer's Draw() receives: textured
 // against untextured draws, where the texture came from, and the TEX0 formats. Ships 0.
 #ifndef GS_DRAW_KIND_STATS
@@ -7057,6 +7067,11 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		// Ad blends are completely wrong without sw blend (Ad is 0.5 not 1 for 128). We can spare a barrier for it.
 		|| (blend_ad && !blend_multipass_group && no_prim_overlap && !new_rt_alpha_scale));
 
+#if GS_FRAME_COST_STATS
+	bool frame_cost_basic_ran = false;
+	bool frame_cost_blend_mix = false;
+#endif
+
 	switch (GSConfig.AccurateBlendingUnit)
 	{
 		case AccBlendLevel::Maximum:
@@ -7091,6 +7106,10 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			// Do not run BLEND MIX if sw blending is already present, it's less accurate.
 			blend_mix &= !sw_blending;
 			sw_blending |= blend_mix;
+#if GS_FRAME_COST_STATS
+			frame_cost_basic_ran = true;
+			frame_cost_blend_mix = blend_mix;
+#endif
 			[[fallthrough]];
 		case AccBlendLevel::Minimum:
 			// Enable sw blending for non recursive mode.
@@ -7109,7 +7128,7 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		
 		// Force SW blending with barriers.
 		GSConfig.UseDebugBlend
-#if GS_DUAL_SOURCE_FALLBACK
+#if GS_DUAL_SOURCE_FALLBACK && GS_DUAL_SOURCE_FALLBACK_FORCE_SW
 		// Device has no dual-source blending, and this draw would read the second shader
 		// colour output (including blend_mix, which later assigns SRC1_COLOR). Blend in
 		// the shader only when the framebuffer is readable; otherwise the safety net at
@@ -7119,6 +7138,20 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			(features.framebuffer_fetch || features.feedback_loops()))
 #endif
 		;
+
+#if GS_FRAME_COST_STATS
+	const bool frame_cost_fetch_force = features.framebuffer_fetch && (one_barrier || m_conf.require_full_barrier);
+	const bool frame_cost_other_force = (m_conf.ps.IsFeedbackLoopDepth() && !features.depth_feedback) || GSConfig.UseDebugBlend;
+#if GS_DUAL_SOURCE_FALLBACK && GS_DUAL_SOURCE_FALLBACK_FORCE_SW
+	const bool frame_cost_fallback = !features.dual_source_blend &&
+		(GSDevice::IsDualSourceBlendFactor(blend.src) || GSDevice::IsDualSourceBlendFactor(blend.dst) || blend_mix) &&
+		(features.framebuffer_fetch || features.feedback_loops());
+#else
+	const bool frame_cost_fallback = false;
+#endif
+	bool frame_cost_free_colclip = false;
+	bool frame_cost_accum_colclip = false;
+#endif
 
 #if GS_FRAME_COST_STATS && GS_DUAL_SOURCE_FALLBACK
 	// A35 diagnostic: true when only the dual-source fallback clause above turns on shader
@@ -7181,6 +7214,9 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			GL_INS("HW: COLCLIP Free mode ENABLED");
 			m_conf.ps.colclip  = 1;
 			sw_blending        = true;
+#if GS_FRAME_COST_STATS
+			frame_cost_free_colclip = true;
+#endif
 			// Disable the colclip hw algo
 			accumulation_blend = false;
 			blend_mix          = false;
@@ -7192,6 +7228,9 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			GL_INS("HW: COLCLIP ACCU HW mode ENABLED");
 			m_conf.ps.colclip_hw = 1;
 			sw_blending = true; // Enable sw blending for the colclip algo
+#if GS_FRAME_COST_STATS
+			frame_cost_accum_colclip = true;
+#endif
 
 			m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
 		}
@@ -7291,6 +7330,19 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		if (frame_cost_fallback_only)
 			g_perfmon.Put(GSPerfMon::DualSourceFallbackDraws, 1);
 #endif
+		GSBlendReason::Inputs frame_cost_in;
+		frame_cost_in.fetch_force = frame_cost_fetch_force;
+		frame_cost_in.fallback = frame_cost_fallback;
+		frame_cost_in.other_force = frame_cost_other_force;
+		frame_cost_in.barrier_req = frame_cost_basic_ran && blend_requires_barrier;
+		frame_cost_in.prefer_sw = frame_cost_basic_ran && prefer_sw_blend;
+		frame_cost_in.free_blend = frame_cost_basic_ran && free_blend;
+		frame_cost_in.blend_mix = frame_cost_blend_mix;
+		frame_cost_in.non_recursive = blend_non_recursive;
+		frame_cost_in.free_colclip = frame_cost_free_colclip;
+		frame_cost_in.accum_colclip = frame_cost_accum_colclip;
+		s_frame_cost_sb_reason = GSBlendReason::Select(frame_cost_in);
+		g_perfmon.Put(static_cast<GSPerfMon::counter_t>(GSPerfMon::SbReasonFetchForce + s_frame_cost_sb_reason), 1);
 #endif
 		// Require the fix alpha vlaue
 		if (m_conf.ps.blend_c == 2)
@@ -9416,6 +9468,9 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	date_options.stencil_one = false;
 
 	ResetStates();
+#if GS_FRAME_COST_STATS
+	s_frame_cost_sb_reason = GSBlendReason::None;
+#endif
 
 	m_conf.cb_vs.texture_offset = {};
 	m_conf.ps.scanmsk = env.SCANMSK.MSK;
@@ -9624,6 +9679,33 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 		GL_INS("HW: Aborting draw %s due to alpha test config.", s_n);
 		return;
 	}
+
+#if GS_FRAME_COST_STATS
+	// B29: final framebuffer read (tfx_fs.glsl NEEDS_RT) and bounding-rectangle area, after the
+	// alpha-test second pass, which can still change afail.
+	{
+		const double frame_cost_area = GSBlendReason::RectArea(m_r.x, m_r.y, m_r.z, m_r.w, rtscale);
+		const bool frame_cost_needs_rt = GSBlendReason::NeedsRt(m_conf.ps.tex_is_fb, m_conf.ps.date,
+			static_cast<std::uint32_t>(m_conf.ps.afail), m_conf.ps.fbmask, m_conf.ps.blend_a, m_conf.ps.blend_b,
+			m_conf.ps.blend_c, m_conf.ps.blend_d, m_conf.ps.a_masked);
+		g_perfmon.Put(GSPerfMon::AreaAll, frame_cost_area);
+		if (frame_cost_needs_rt)
+		{
+			g_perfmon.Put(GSPerfMon::NeedsRtAll, 1);
+			g_perfmon.Put(GSPerfMon::AreaNeedsRt, frame_cost_area);
+		}
+		if (s_frame_cost_sb_reason != GSBlendReason::None)
+		{
+			g_perfmon.Put(GSPerfMon::ShaderBlendFinal, 1);
+			g_perfmon.Put(GSPerfMon::AreaSb, frame_cost_area);
+			if (frame_cost_needs_rt)
+			{
+				g_perfmon.Put(GSPerfMon::NeedsRtSb, 1);
+				g_perfmon.Put(static_cast<GSPerfMon::counter_t>(GSPerfMon::NeedsRtFetchForce + s_frame_cost_sb_reason), 1);
+			}
+		}
+	}
+#endif
 
 	// rs
 	const GSVector4i hacked_scissor = m_channel_shuffle ? GSVector4i::cxpr(0, 0, 1024, 1024) : m_context->scissor.in;
