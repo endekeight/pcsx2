@@ -7128,7 +7128,7 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		
 		// Force SW blending with barriers.
 		GSConfig.UseDebugBlend
-#if GS_DUAL_SOURCE_FALLBACK
+#if GS_DUAL_SOURCE_FALLBACK && GS_DUAL_SOURCE_FALLBACK_FORCE_SW
 		// Device has no dual-source blending, and this draw would read the second shader
 		// colour output (including blend_mix, which later assigns SRC1_COLOR). Blend in
 		// the shader only when the framebuffer is readable; otherwise the safety net at
@@ -7142,7 +7142,7 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 #if GS_FRAME_COST_STATS
 	const bool frame_cost_fetch_force = features.framebuffer_fetch && (one_barrier || m_conf.require_full_barrier);
 	const bool frame_cost_other_force = (m_conf.ps.IsFeedbackLoopDepth() && !features.depth_feedback) || GSConfig.UseDebugBlend;
-#if GS_DUAL_SOURCE_FALLBACK
+#if GS_DUAL_SOURCE_FALLBACK && GS_DUAL_SOURCE_FALLBACK_FORCE_SW
 	const bool frame_cost_fallback = !features.dual_source_blend &&
 		(GSDevice::IsDualSourceBlendFactor(blend.src) || GSDevice::IsDualSourceBlendFactor(blend.dst) || blend_mix) &&
 		(features.framebuffer_fetch || features.feedback_loops());

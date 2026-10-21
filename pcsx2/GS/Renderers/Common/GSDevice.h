@@ -18,6 +18,11 @@
 #ifndef GS_DUAL_SOURCE_FALLBACK
 #define GS_DUAL_SOURCE_FALLBACK 1
 #endif
+// B29 Arm H diagnostic. At 0 the dual-source fallback no longer forces shader blending; the
+// SRC1 factor approximation at the end of GSRendererHW::EmulateBlending stays on. Ships 1.
+#ifndef GS_DUAL_SOURCE_FALLBACK_FORCE_SW
+#define GS_DUAL_SOURCE_FALLBACK_FORCE_SW 1
+#endif
 // A11/C100. GS_FBFETCH_ARM lets the OpenGL device use GL_ARM_shader_framebuffer_fetch when
 // GL_EXT_shader_framebuffer_fetch is absent; GS_FBFETCH_PREFER_ARM (diagnostic, requires
 // GS_FBFETCH_ARM) prefers the ARM extension when both exist. Both ship 0.
