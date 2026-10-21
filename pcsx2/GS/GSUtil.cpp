@@ -197,6 +197,62 @@ const char* GSUtil::GetPerfMonCounterName(GSPerfMon::counter_t counter, bool hw)
 			return "ShaderBlendDraws";
 		if (counter == GSPerfMon::DualSourceFallbackDraws)
 			return "DualSourceFallbackDraws";
+		if (counter == GSPerfMon::SbReasonFetchForce)
+			return "SbReasonFetchForce";
+		if (counter == GSPerfMon::SbReasonFallback)
+			return "SbReasonFallback";
+		if (counter == GSPerfMon::SbReasonOtherForce)
+			return "SbReasonOtherForce";
+		if (counter == GSPerfMon::SbReasonBarrierReq)
+			return "SbReasonBarrierReq";
+		if (counter == GSPerfMon::SbReasonPreferSw)
+			return "SbReasonPreferSw";
+		if (counter == GSPerfMon::SbReasonFreeBlend)
+			return "SbReasonFreeBlend";
+		if (counter == GSPerfMon::SbReasonBlendMix)
+			return "SbReasonBlendMix";
+		if (counter == GSPerfMon::SbReasonNonRecursive)
+			return "SbReasonNonRecursive";
+		if (counter == GSPerfMon::SbReasonFreeColclip)
+			return "SbReasonFreeColclip";
+		if (counter == GSPerfMon::SbReasonAccumColclip)
+			return "SbReasonAccumColclip";
+		if (counter == GSPerfMon::SbReasonOther)
+			return "SbReasonOther";
+		if (counter == GSPerfMon::NeedsRtFetchForce)
+			return "NeedsRtFetchForce";
+		if (counter == GSPerfMon::NeedsRtFallback)
+			return "NeedsRtFallback";
+		if (counter == GSPerfMon::NeedsRtOtherForce)
+			return "NeedsRtOtherForce";
+		if (counter == GSPerfMon::NeedsRtBarrierReq)
+			return "NeedsRtBarrierReq";
+		if (counter == GSPerfMon::NeedsRtPreferSw)
+			return "NeedsRtPreferSw";
+		if (counter == GSPerfMon::NeedsRtFreeBlend)
+			return "NeedsRtFreeBlend";
+		if (counter == GSPerfMon::NeedsRtBlendMix)
+			return "NeedsRtBlendMix";
+		if (counter == GSPerfMon::NeedsRtNonRecursive)
+			return "NeedsRtNonRecursive";
+		if (counter == GSPerfMon::NeedsRtFreeColclip)
+			return "NeedsRtFreeColclip";
+		if (counter == GSPerfMon::NeedsRtAccumColclip)
+			return "NeedsRtAccumColclip";
+		if (counter == GSPerfMon::NeedsRtOther)
+			return "NeedsRtOther";
+		if (counter == GSPerfMon::NeedsRtSb)
+			return "NeedsRtSb";
+		if (counter == GSPerfMon::NeedsRtAll)
+			return "NeedsRtAll";
+		if (counter == GSPerfMon::ShaderBlendFinal)
+			return "ShaderBlendFinal";
+		if (counter == GSPerfMon::AreaAll)
+			return "AreaAll";
+		if (counter == GSPerfMon::AreaSb)
+			return "AreaSb";
+		if (counter == GSPerfMon::AreaNeedsRt)
+			return "AreaNeedsRt";
 #endif
 		return counter < std::size(names_hw) ? names_hw[counter] : "";
 	}

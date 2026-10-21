@@ -34,6 +34,34 @@ public:
 #if GS_FRAME_COST_STATS
 		ShaderBlendDraws, // Hardware draws that end with shader blending.
 		DualSourceFallbackDraws, // Hardware draws shader-blended only because of the GS_DUAL_SOURCE_FALLBACK clause.
+		SbReasonFetchForce, // B29: shader-blend draws whose first reason is the framebuffer-fetch force term.
+		SbReasonFallback, // B29: shader-blend draws whose first reason is the dual-source fallback clause.
+		SbReasonOtherForce, // B29: shader-blend draws whose first reason is depth feedback or debug blend force.
+		SbReasonBarrierReq, // B29: shader-blend draws whose first reason is blend_requires_barrier under Basic.
+		SbReasonPreferSw, // B29: shader-blend draws whose first reason is prefer_sw_blend under Basic.
+		SbReasonFreeBlend, // B29: shader-blend draws whose first reason is free_blend under Basic.
+		SbReasonBlendMix, // B29: shader-blend draws whose first reason is blend_mix under Basic.
+		SbReasonNonRecursive, // B29: shader-blend draws whose first reason is blend_non_recursive under Minimum.
+		SbReasonFreeColclip, // B29: shader-blend draws whose first reason is colour-clip free mode.
+		SbReasonAccumColclip, // B29: shader-blend draws whose first reason is colour-clip accumulation mode.
+		SbReasonOther, // B29: shader-blend draws with other or unmatched reason.
+		NeedsRtFetchForce, // B29: NEEDS_RT draws whose shader-blend reason is fetch force.
+		NeedsRtFallback, // B29: NEEDS_RT draws whose shader-blend reason is dual-source fallback.
+		NeedsRtOtherForce, // B29: NEEDS_RT draws whose shader-blend reason is other force.
+		NeedsRtBarrierReq, // B29: NEEDS_RT draws whose shader-blend reason is barrier required.
+		NeedsRtPreferSw, // B29: NEEDS_RT draws whose shader-blend reason is prefer SW blend.
+		NeedsRtFreeBlend, // B29: NEEDS_RT draws whose shader-blend reason is free blend.
+		NeedsRtBlendMix, // B29: NEEDS_RT draws whose shader-blend reason is blend mix.
+		NeedsRtNonRecursive, // B29: NEEDS_RT draws whose shader-blend reason is non-recursive blend.
+		NeedsRtFreeColclip, // B29: NEEDS_RT draws whose shader-blend reason is free colour-clip.
+		NeedsRtAccumColclip, // B29: NEEDS_RT draws whose shader-blend reason is accumulation colour-clip.
+		NeedsRtOther, // B29: NEEDS_RT draws whose shader-blend reason is other.
+		NeedsRtSb, // B29: shader-blend draws whose final pixel shader reads the framebuffer.
+		NeedsRtAll, // B29: all hardware draws whose final pixel shader reads the framebuffer.
+		ShaderBlendFinal, // B29: shader-blend draws that reached the end of setup without an ABORT_DRAW.
+		AreaAll, // B29: bounding-rectangle pixels at render-target scale across all hardware draws.
+		AreaSb, // B29: bounding-rectangle pixels at render-target scale across shader-blend draws.
+		AreaNeedsRt, // B29: bounding-rectangle pixels at render-target scale across NEEDS_RT draws.
 #endif
 		CounterLast,
 
