@@ -243,6 +243,11 @@ namespace GSTextureCost
 		bool m_active = false;
 	};
 
+	inline std::uint32_t CompressedUsefulBytes(std::uint32_t width, std::uint32_t height, std::uint32_t block_dim, std::uint32_t bytes_per_block)
+	{
+		return ((width + block_dim - 1) / block_dim) * ((height + block_dim - 1) / block_dim) * bytes_per_block;
+	}
+
 #if GS_TEXTURE_COST_STATS
 	extern Totals g_tc_totals;
 	extern StackTimer g_tc_timer;

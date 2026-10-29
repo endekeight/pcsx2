@@ -299,3 +299,35 @@ TEST(GSTextureCostSamplerTest, ZeroOverheadUnderFlagZero)
 	SUCCEED();
 #endif
 }
+
+TEST(GSTextureCostBytesTest, BC1Like)
+{
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(4, 4, 4, 8), 8u);
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(5, 4, 4, 8), 16u);
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(4, 5, 4, 8), 16u);
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(8, 8, 4, 8), 32u);
+}
+
+TEST(GSTextureCostBytesTest, BC3Like)
+{
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(4, 4, 4, 16), 16u);
+}
+
+TEST(GSTextureCostBytesTest, UncompressedLike)
+{
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(3, 2, 1, 4), 24u);
+}
+
+TEST(GSTextureCostBytesTest, PaddedPitchIgnored)
+{
+	// Document that a source pitch of 16 for a 4x4 BC1 rectangle still gives useful 8
+	// (source pitch does not enter the useful bytes formula).
+	const std::uint32_t width = 4;
+	const std::uint32_t height = 4;
+	const std::uint32_t block_dim = 4;
+	const std::uint32_t bytes_per_block = 8;
+	[[maybe_unused]] const std::uint32_t source_pitch = 16;
+
+	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(width, height, block_dim, bytes_per_block), 8u);
+}
+

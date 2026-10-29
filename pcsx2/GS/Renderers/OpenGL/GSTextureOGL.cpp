@@ -198,7 +198,9 @@ bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int 
 	const u32 map_size = r.height() * preferred_pitch;
 
 #if GS_TEXTURE_COST_STATS
-	const u32 useful_bytes = IsCompressedFormat() ? CalcUploadSize(r.height(), CalcUploadPitch(r.width())) : (r.width() << m_int_shift) * r.height();
+	const u32 useful_bytes = IsCompressedFormat() ?
+		GSTextureCost::CompressedUsefulBytes(r.width(), r.height(), GetCompressedBlockSize(m_format), GetCompressedBytesPerBlock(m_format)) :
+		(r.width() << m_int_shift) * r.height();
 	if (r.height() == 1)
 		GSTextureCost::g_tc_totals.uploads_height_1++;
 	if (useful_bytes <= 1024)
