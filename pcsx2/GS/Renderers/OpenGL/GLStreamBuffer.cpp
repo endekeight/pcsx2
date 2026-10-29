@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "GS/Renderers/OpenGL/GLStreamBuffer.h"
+#include "GS/Renderers/Common/GSTextureCostStats.h"
 
 #include "common/BitUtils.h"
 #include "common/AlignedMalloc.h"
@@ -181,9 +182,22 @@ namespace
 
 		__fi void WaitForSync(GLsync& sync)
 		{
+#if GS_TEXTURE_COST_STATS
+			struct timespec ts_start;
+			clock_gettime(CLOCK_MONOTONIC, &ts_start);
+#endif
 			glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, GL_TIMEOUT_IGNORED);
 			glDeleteSync(sync);
 			sync = nullptr;
+#if GS_TEXTURE_COST_STATS
+			struct timespec ts_end;
+			clock_gettime(CLOCK_MONOTONIC, &ts_end);
+			const std::uint64_t wait_ns = (static_cast<std::uint64_t>(ts_end.tv_sec) * 1000000000ULL + ts_end.tv_nsec) -
+			                              (static_cast<std::uint64_t>(ts_start.tv_sec) * 1000000000ULL + ts_start.tv_nsec);
+			const std::size_t k = (m_target == GL_PIXEL_UNPACK_BUFFER) ? 0 : 1;
+			GSTextureCost::g_tc_totals.streambuf_wait_for_sync_calls[k]++;
+			GSTextureCost::g_tc_totals.streambuf_wait_wall_ns[k] += wait_ns;
+#endif
 		}
 
 		__fi void EnsureSyncsWaitedForOffset(u32 offset)
@@ -212,6 +226,10 @@ namespace
 
 				// rewind, and try again
 				m_position = 0;
+#if GS_TEXTURE_COST_STATS
+				const std::size_t k = (m_target == GL_PIXEL_UNPACK_BUFFER) ? 0 : 1;
+				GSTextureCost::g_tc_totals.streambuf_wraps_to_zero[k]++;
+#endif
 
 				// wait for the sync at the start of the buffer
 				WaitForSync(m_sync_objects[0]);
@@ -244,6 +262,10 @@ namespace
 
 		MappingResult Map(u32 alignment, u32 min_size) override
 		{
+#if GS_TEXTURE_COST_STATS
+			const std::size_t k = (m_target == GL_PIXEL_UNPACK_BUFFER) ? 0 : 1;
+			GSTextureCost::g_tc_totals.streambuf_map_calls[k]++;
+#endif
 			if (m_position > 0)
 				m_position = Common::AlignUp(m_position, alignment);
 

@@ -9,6 +9,7 @@
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
 #include "GS/GSXXH.h"
+#include "GS/Renderers/Common/GSTextureCostStats.h"
 
 #include "common/Console.h"
 #include "common/BitUtils.h"
@@ -111,6 +112,14 @@ void GSTextureCache::RemoveAll(bool sources, bool targets, bool hash_cache)
 		m_hash_cache_replacement_memory_usage = 0;
 	}
 }
+
+#if GS_TEXTURE_COST_STATS
+namespace GSTextureCost
+{
+	Totals g_tc_totals{};
+	StackTimer g_tc_timer{&g_tc_totals};
+}
+#endif
 
 bool GSTextureCache::FullRectDirty(Target* target, u32 rgba_mask)
 {
@@ -1325,6 +1334,9 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const bool is_color, const 
 {
 	GL_CACHE("TC: Lookup Source <%d,%d => %d,%d> (0x%x, %s, BW: %u, CBP: 0x%x, TW: %d, TH: %d)", r.x, r.y, r.z, r.w, TEX0.TBP0, GSUtil::GetPSMName(TEX0.PSM), TEX0.TBW, TEX0.CBP, 1 << TEX0.TW, 1 << TEX0.TH);
 
+	GS_TEXTURE_COST_INC(lookups);
+	GS_TEXTURE_COST_SCOPE(Lookup);
+
 	const GSLocalMemory::psm_t& psm_s = GSLocalMemory::m_psm[TEX0.PSM];
 	//const GSLocalMemory::psm_t& cpsm = psm.pal > 0 ? GSLocalMemory::m_psm[TEX0.CPSM] : psm;
 
@@ -2143,7 +2155,10 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const bool is_color, const 
 		}
 
 		if (tex_merge_rt)
+		{
+			GS_TEXTURE_COST_INC(lookups_created_merged);
 			src = CreateMergedSource(TEX0, TEXA, region, dst->m_scale);
+		}
 	}
 
 	GSVector4i rect = r;
@@ -2219,12 +2234,14 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const bool is_color, const 
 			}
 		}
 
+		GS_TEXTURE_COST_INC(lookups_created_source);
 		src = CreateSource(src_TEX0, TEXA, CLAMP, dst, x_offset, y_offset, lod, &rect, gpu_clut, region, target_bp_hit_outside_valid_area && TEX0.PSM != PSMT8);
 		if (!src) [[unlikely]]
 			return nullptr;
 	}
 	else
 	{
+		GS_TEXTURE_COST_INC(lookups_reused);
 		GL_CACHE("TC: src hit: (0x%x, 0x%x, %s)",
 			TEX0.TBP0, psm_s.pal > 0 ? TEX0.CBP : 0,
 			GSUtil::GetPSMName(TEX0.PSM));
@@ -4540,6 +4557,9 @@ bool GSTextureCache::PrepareDownloadTexture(u32 width, u32 height, GSTexture::Fo
 }*/
 void GSTextureCache::InvalidateContainedTargets(u32 start_bp, u32 end_bp, u32 write_psm, u32 write_bw, u32 fb_mask, bool ignore_exact)
 {
+	GS_TEXTURE_COST_INC(inv_containedtargets_calls);
+	GS_TEXTURE_COST_SCOPE(Invalidate);
+
 	const bool preserve_alpha = (GSLocalMemory::m_psm[write_psm].trbpp == 24) || (fb_mask & 0xFF000000);
 	for (int type = 0; type < (ignore_exact ? 1 : 2); type++)
 	{
@@ -4668,6 +4688,9 @@ void GSTextureCache::InvalidateContainedTargets(u32 start_bp, u32 end_bp, u32 wr
 // must invalidate the Target/Depth respectively
 void GSTextureCache::InvalidateVideoMemType(int type, u32 bp, u32 write_psm, u32 write_fbmsk, bool dirty_only)
 {
+	GS_TEXTURE_COST_INC(inv_videomemtype_calls);
+	GS_TEXTURE_COST_SCOPE(Invalidate);
+
 	auto& list = m_dst[type];
 	for (auto i = list.begin(); i != list.end(); ++i)
 	{
@@ -4728,6 +4751,9 @@ void GSTextureCache::InvalidateVideoMemType(int type, u32 bp, u32 write_psm, u32
 // Called each time you want to write to the GS memory
 void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& rect, bool target)
 {
+	GS_TEXTURE_COST_INC(inv_videomem_calls);
+	GS_TEXTURE_COST_SCOPE(Invalidate);
+
 	const u32 bp = off.bp();
 	const u32 bw = off.bw();
 	const u32 psm = off.psm();
@@ -4936,6 +4962,9 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 // full_flush is set when it's a Local->Local stransfer and both src and destination are the same.
 void GSTextureCache::InvalidateLocalMem(const GSOffset& off, const GSVector4i& r, bool full_flush)
 {
+	GS_TEXTURE_COST_INC(inv_localmem_calls);
+	GS_TEXTURE_COST_SCOPE(Invalidate);
+
 	const u32 bp = off.bp();
 	const u32 psm = off.psm();
 	[[maybe_unused]] const u32 bw = off.bw();
@@ -5937,6 +5966,9 @@ bool GSTextureCache::Has32BitTarget(u32 bp)
 // postpone it for later.
 void GSTextureCache::InvalidateVideoMemSubTarget(GSTextureCache::Target* rt)
 {
+	GS_TEXTURE_COST_INC(inv_subtarget_calls);
+	GS_TEXTURE_COST_SCOPE(Invalidate);
+
 	if (!rt)
 		return;
 
@@ -6085,6 +6117,8 @@ void GSTextureCache::IncAge()
 //Fixme: Several issues in here. Not handling depth stencil, pitch conversion doesnt work.
 GSTextureCache::Source* GSTextureCache::CreateSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const GIFRegCLAMP& CLAMP, Target* dst, int x_offset, int y_offset, const GSVector2i* lod, const GSVector4i* src_range, GSTexture* gpu_clut, SourceRegion region, bool force_temp)
 {
+	GS_TEXTURE_COST_SCOPE(CreateSource);
+
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	Source* src = new Source(TEX0, TEXA);
 
@@ -6704,6 +6738,8 @@ GSTextureCache::Source* GSTextureCache::CreateSource(const GIFRegTEX0& TEX0, con
 
 GSTextureCache::Source* GSTextureCache::CreateMergedSource(GIFRegTEX0 TEX0, GIFRegTEXA TEXA, SourceRegion region, float scale)
 {
+	GS_TEXTURE_COST_SCOPE(CreateSource);
+
 	// We *should* be able to use the TBW here as an indicator of size... except Destroy All Humans 2 sets
 	// TBW to 10, and samples from 64 through 703... which means it'd be grabbing the next row at the end.
 	// Round the size up to the next block
@@ -7247,6 +7283,9 @@ GSTextureCache::Target* GSTextureCache::Target::Create(GIFRegTEX0 TEX0, int w, i
 
 GSTexture* GSTextureCache::LookupPaletteSource(u32 CBP, u32 CPSM, u32 CBW, GSVector2i& offset, float* scale, const GSVector2i& size)
 {
+	GS_TEXTURE_COST_INC(palette_lookups);
+	GS_TEXTURE_COST_SCOPE(Palette);
+
 	for (auto t : m_dst[RenderTarget])
 	{
 		if (!t->m_used)
@@ -7588,12 +7627,19 @@ void GSTextureCache::Source::SetPages()
 
 void GSTextureCache::Source::Update(const GSVector4i& rect, int level)
 {
+	GS_TEXTURE_COST_SCOPE(SourceUpdate);
+
 	m_age = 0;
 	if (m_from_target)
 		m_from_target->m_age = 0;
 
 	if (m_target || m_from_hash_cache || (m_complete_layers & (1u << level)))
+	{
+		GS_TEXTURE_COST_INC(source_update_early);
 		return;
+	}
+
+	GS_TEXTURE_COST_INC(source_update_work);
 
 	if (CanPreload())
 	{
@@ -7700,6 +7746,8 @@ void GSTextureCache::Source::UpdateLayer(const GIFRegTEX0& TEX0, const GSVector4
 
 void GSTextureCache::Source::Write(const GSVector4i& r, int layer, const GSOffset& off)
 {
+	GS_TEXTURE_COST_INC(source_write_calls);
+
 	if (!m_write.rect)
 		m_write.rect = static_cast<GSVector4i*>(_aligned_malloc(3 * sizeof(GSVector4i), 16));
 
@@ -7736,6 +7784,9 @@ void GSTextureCache::Source::Write(const GSVector4i& r, int layer, const GSOffse
 
 void GSTextureCache::Source::Flush(u32 count, int layer, const GSOffset& off)
 {
+	GS_TEXTURE_COST_INC(source_flush_calls);
+	GS_TEXTURE_COST_ADD(source_flushed_rects, count);
+
 	// This function as written will not work for paletted formats copied from framebuffers
 	// because they are 8 or 4 bit formats on the GS and the GS local memory module reads
 	// these into an 8 bit format while the D3D surfaces are 32 bit.
@@ -7806,6 +7857,9 @@ void GSTextureCache::Source::Flush(u32 count, int layer, const GSOffset& off)
 
 void GSTextureCache::Source::PreloadLevel(int level)
 {
+	GS_TEXTURE_COST_INC(preload_level_calls);
+	GS_TEXTURE_COST_SCOPE(PreloadMip);
+
 	// m_TEX0 is adjusted for mips (messy, should be changed).
 	const HashType hash = HashTexture(m_TEX0, m_TEXA, m_region);
 
@@ -8349,6 +8403,7 @@ void GSTextureCache::SourceMap::RemoveAll()
 void GSTextureCache::SourceMap::RemoveAt(Source* s)
 {
 	m_surfaces.erase(s);
+	GS_TEXTURE_COST_INC(sources_removed);
 
 	GL_CACHE("TC: Remove Src Texture: 0x%x TBW %u PSM %s",
 		s->m_TEX0.TBP0, s->m_TEX0.TBW, GSUtil::GetPSMName(s->m_TEX0.PSM));
@@ -8369,6 +8424,8 @@ void GSTextureCache::SourceMap::RemoveAt(Source* s)
 
 void GSTextureCache::AttachPaletteToSource(Source* s, u16 pal, bool need_gs_texture, bool update_alpha_minmax)
 {
+	GS_TEXTURE_COST_INC(palette_attaches);
+
 	s->m_palette_obj = m_palette_map.LookupPalette(pal, need_gs_texture);
 	s->m_palette = need_gs_texture ? s->m_palette_obj->GetPaletteGSTexture() : nullptr;
 	if (update_alpha_minmax)
@@ -8386,6 +8443,8 @@ void GSTextureCache::AttachPaletteToSource(Source* s, u16 pal, bool need_gs_text
 
 void GSTextureCache::AttachPaletteToSource(Source* s, GSTexture* gpu_clut)
 {
+	GS_TEXTURE_COST_INC(palette_attaches);
+
 	s->m_palette_obj = nullptr;
 	s->m_palette = gpu_clut;
 
@@ -9086,6 +9145,9 @@ GSTextureCache::HashType GSTextureCache::HashTexture(const GIFRegTEX0& TEX0, con
 void GSTextureCache::PreloadTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region, GSLocalMemory& mem,
 	bool paltex, GSTexture* tex, u32 level, std::pair<u8, u8>* alpha_minmax)
 {
+	GS_TEXTURE_COST_INC(preload_texture_calls);
+	GS_TEXTURE_COST_SCOPE(PreloadMip);
+
 	// m_TEX0 is adjusted for mips (messy, should be changed).
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	const GSVector2i& bs = psm.bs;

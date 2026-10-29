@@ -7,6 +7,7 @@
 #include "GS/GSExtra.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSGL.h"
+#include "GS/Renderers/Common/GSTextureCostStats.h"
 
 #include "common/Console.h"
 #include "common/BitUtils.h"
@@ -196,6 +197,20 @@ bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int 
 	const u32 preferred_pitch = Common::AlignUpPow2(r.width() << m_int_shift, TEXTURE_UPLOAD_PITCH_ALIGNMENT);
 	const u32 map_size = r.height() * preferred_pitch;
 
+#if GS_TEXTURE_COST_STATS
+	const u32 useful_bytes = (r.width() << m_int_shift) * r.height();
+	if (r.height() == 1)
+		GSTextureCost::g_tc_totals.uploads_height_1++;
+	if (useful_bytes <= 1024)
+		GSTextureCost::g_tc_totals.hist_le_1k++;
+	else if (useful_bytes <= 16384)
+		GSTextureCost::g_tc_totals.hist_le_16k++;
+	else if (useful_bytes <= 262144)
+		GSTextureCost::g_tc_totals.hist_le_256k++;
+	else
+		GSTextureCost::g_tc_totals.hist_gt_256k++;
+#endif
+
 #if 0
 	if (r.height() == 1) {
 		// Palette data. Transfer is small either 64B or 1024B.
@@ -215,28 +230,53 @@ bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int 
 	{
 		const u32 row_length = CalcUploadRowLengthFromPitch(pitch);
 		const u32 upload_size = CalcUploadSize(r.height(), pitch);
+#if GS_TEXTURE_COST_STATS
+		GSTextureCost::g_tc_totals.uploads_compressed++;
+		GSTextureCost::g_tc_totals.bytes_useful_compressed += useful_bytes;
+		GSTextureCost::g_tc_totals.bytes_submitted_compressed += upload_size;
+#endif
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
+		GS_TEXTURE_COST_BEGIN(UploadGL);
 		glCompressedTextureSubImage2D(m_texture_id, layer, r.x, r.y, r.width(), r.height(), m_int_format, upload_size, data);
+		GS_TEXTURE_COST_END(UploadGL);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	}
 	else if (!sb || map_size > sb->GetChunkSize())
 	{
+#if GS_TEXTURE_COST_STATS
+		GSTextureCost::g_tc_totals.uploads_direct++;
+		GSTextureCost::g_tc_totals.bytes_useful_direct += useful_bytes;
+		GSTextureCost::g_tc_totals.bytes_submitted_direct += (pitch * r.height());
+#endif
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch >> m_int_shift);
+		GS_TEXTURE_COST_BEGIN(UploadGL);
 		glTextureSubImage2D(m_texture_id, layer, r.x, r.y, r.width(), r.height(), m_int_format, m_int_type, data);
+		GS_TEXTURE_COST_END(UploadGL);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); // Restore default behavior
 	}
 	else
 	{
+#if GS_TEXTURE_COST_STATS
+		GSTextureCost::g_tc_totals.uploads_staged++;
+		GSTextureCost::g_tc_totals.bytes_useful_staged += useful_bytes;
+		GSTextureCost::g_tc_totals.bytes_submitted_staged += map_size;
+#endif
+		GS_TEXTURE_COST_BEGIN(StreamMap);
 		const auto map = sb->Map(TEXTURE_UPLOAD_ALIGNMENT, map_size);
+		GS_TEXTURE_COST_END(StreamMap);
+		GS_TEXTURE_COST_BEGIN(UploadCopy);
 		StringUtil::StrideMemCpy(map.pointer, preferred_pitch, data, pitch, r.width() << m_int_shift, r.height());
+		GS_TEXTURE_COST_END(UploadCopy);
 		sb->Unmap(map_size);
 		sb->Bind();
 
 		const u32 row_length = CalcUploadRowLengthFromPitch(preferred_pitch);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 
+		GS_TEXTURE_COST_BEGIN(UploadGL);
 		glTextureSubImage2D(m_texture_id, layer, r.x, r.y, r.width(), r.height(), m_int_format, m_int_type,
 			reinterpret_cast<void*>(static_cast<uintptr_t>(map.buffer_offset)));
+		GS_TEXTURE_COST_END(UploadGL);
 
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
@@ -273,7 +313,14 @@ bool GSTextureOGL::Map(GSMap& m, const GSVector4i* _r, int layer)
 		GL_PUSH_("Upload Texture %d", m_texture_id); // POP is in Unmap
 		g_perfmon.Put(GSPerfMon::TextureUploads, 1);
 
+#if GS_TEXTURE_COST_STATS
+		GSTextureCost::g_tc_totals.uploads_map_unmap++;
+		GSTextureCost::g_tc_totals.bytes_useful_map_unmap += ((r.width() << m_int_shift) * r.height());
+		GSTextureCost::g_tc_totals.bytes_submitted_map_unmap += upload_size;
+#endif
+		GS_TEXTURE_COST_BEGIN(StreamMap);
 		const auto map = sb->Map(TEXTURE_UPLOAD_ALIGNMENT, upload_size);
+		GS_TEXTURE_COST_END(StreamMap);
 		m.bits = static_cast<u8*>(map.pointer);
 
 		// Save the area for the unmap
@@ -305,8 +352,10 @@ void GSTextureOGL::Unmap()
 		const u32 row_length = CalcUploadRowLengthFromPitch(pitch);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 
+		GS_TEXTURE_COST_BEGIN(UploadGL);
 		glTextureSubImage2D(m_texture_id, m_layer, m_r_x, m_r_y, m_r_w, m_r_h, m_int_format, m_int_type,
 			reinterpret_cast<void*>(static_cast<uintptr_t>(m_map_offset)));
+		GS_TEXTURE_COST_END(UploadGL);
 
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
@@ -320,6 +369,9 @@ void GSTextureOGL::Unmap()
 
 void GSTextureOGL::GenerateMipmap()
 {
+	GS_TEXTURE_COST_INC(generate_mipmap_calls);
+	GS_TEXTURE_COST_SCOPE(PreloadMip);
+
 	pxAssert(m_mipmap_levels > 1);
 	GSDeviceOGL::GetInstance()->CommitClear(this, true);
 	glGenerateTextureMipmap(m_texture_id);
