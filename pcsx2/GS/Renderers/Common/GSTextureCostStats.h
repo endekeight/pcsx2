@@ -104,6 +104,17 @@ namespace GSTextureCost
 		std::uint64_t streambuf_wait_for_sync_calls[2]{0, 0};
 		std::uint64_t streambuf_wait_wall_ns[2]{0, 0};
 
+		// Hash Cache
+		std::uint64_t hc_skip = 0;
+		std::uint64_t hc_hits = 0;
+		std::uint64_t hc_misses = 0;
+		std::uint64_t hc_evict_age = 0;
+		std::uint64_t hc_evict_purge = 0;
+		std::uint64_t hc_size_last = 0;
+		std::uint64_t hc_size_max = 0;
+		std::uint64_t hc_recreated_age = 0;
+		std::uint64_t hc_recreated_purge = 0;
+
 		// Sampled Region Timers
 		std::uint64_t region_cpu_ns[static_cast<std::size_t>(Region::Count)]{0};
 		std::uint64_t region_wall_ns[static_cast<std::size_t>(Region::Count)]{0};
@@ -248,9 +259,50 @@ namespace GSTextureCost
 		return ((width + block_dim - 1) / block_dim) * ((height + block_dim - 1) / block_dim) * bytes_per_block;
 	}
 
+	class EvictedKeyRing
+	{
+	public:
+		static constexpr std::size_t kCapacity = 1024;
+		static constexpr std::uint8_t kEvictAge = 1;
+		static constexpr std::uint8_t kEvictPurge = 2;
+
+		struct Entry
+		{
+			std::uint64_t key = 0;
+			std::uint8_t reason = 0;
+			bool valid = false;
+		};
+
+		inline void Add(std::uint64_t key, std::uint8_t reason)
+		{
+			m_entries[m_head] = Entry{key, reason, true};
+			m_head = (m_head + 1) % kCapacity;
+		}
+
+		inline bool Take(std::uint64_t key, std::uint8_t* reason)
+		{
+			for (std::size_t i = 0; i < kCapacity; ++i)
+			{
+				if (m_entries[i].valid && m_entries[i].key == key)
+				{
+					m_entries[i].valid = false;
+					if (reason)
+						*reason = m_entries[i].reason;
+					return true;
+				}
+			}
+			return false;
+		}
+
+	private:
+		std::array<Entry, kCapacity> m_entries{};
+		std::size_t m_head = 0;
+	};
+
 #if GS_TEXTURE_COST_STATS
 	extern Totals g_tc_totals;
 	extern StackTimer g_tc_timer;
+	extern EvictedKeyRing g_tc_evicted;
 
 	class Scope
 	{

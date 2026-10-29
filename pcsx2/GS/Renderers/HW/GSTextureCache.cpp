@@ -118,6 +118,7 @@ namespace GSTextureCost
 {
 	Totals g_tc_totals{};
 	StackTimer g_tc_timer{&g_tc_totals};
+	EvictedKeyRing g_tc_evicted{};
 }
 #endif
 
@@ -7048,7 +7049,12 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	const bool replace = GSConfig.LoadTextureReplacements && GSTextureReplacements::HasAnyReplacementTextures();
 	bool can_cache = (TEX0.PSM >= PSMT8H && TEX0.PSM <= PSMT4HH) ? CanPreloadTextureSize(TEX0.TW, TEX0.TH) : CanCacheTextureSize(TEX0.TW, TEX0.TH);
 	if (!dump && !replace && !can_cache)
+	{
+#if GS_TEXTURE_COST_STATS
+		GS_TEXTURE_COST_INC(hc_skip);
+#endif
 		return nullptr;
+	}
 
 	// need the hash either for replacing, dumping or caching.
 	// if dumping/replacing is on, we compute the clut hash regardless, since replacements aren't indexed
@@ -7084,6 +7090,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	// did we find either a replacement, cached/indexed texture?
 	if (it != m_hash_cache.end())
 	{
+#if GS_TEXTURE_COST_STATS
+		GS_TEXTURE_COST_INC(hc_hits);
+#endif
 		// super easy, cache hit. remove paltex if it's a replacement texture.
 		GL_CACHE("TC: HC Hit: %" PRIx64 " %" PRIx64 " R-%ux%u", key.TEX0Hash, key.CLUTHash, key.region_width, key.region_height);
 		HashCacheEntry* entry = &it->second;
@@ -7191,6 +7200,17 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	// insert into the cache cache, and we're done
 	const HashCacheEntry entry{tex, 1u, 0u, alpha_minmax, compute_alpha_minmax, false};
 	m_hash_cache_memory_usage += tex->GetMemUsage();
+#if GS_TEXTURE_COST_STATS
+	GS_TEXTURE_COST_INC(hc_misses);
+	std::uint8_t evict_reason = 0;
+	if (GSTextureCost::g_tc_evicted.Take(HashCacheKeyHash{}(key), &evict_reason))
+	{
+		if (evict_reason == GSTextureCost::EvictedKeyRing::kEvictAge)
+			GS_TEXTURE_COST_INC(hc_recreated_age);
+		else if (evict_reason == GSTextureCost::EvictedKeyRing::kEvictPurge)
+			GS_TEXTURE_COST_INC(hc_recreated_purge);
+	}
+#endif
 	return &m_hash_cache.emplace(key, entry).first->second;
 }
 
@@ -7230,6 +7250,10 @@ void GSTextureCache::AgeHashCache()
 
 		if (++e.age > MAX_HASH_CACHE_AGE)
 		{
+#if GS_TEXTURE_COST_STATS
+			GS_TEXTURE_COST_INC(hc_evict_age);
+			GSTextureCost::g_tc_evicted.Add(HashCacheKeyHash{}(it->first), GSTextureCost::EvictedKeyRing::kEvictAge);
+#endif
 			it = RemoveFromHashCache(it);
 			continue;
 		}
@@ -7254,8 +7278,18 @@ void GSTextureCache::AgeHashCache()
 		const u32 entries_to_purge = std::min(static_cast<u32>(m_hash_cache.size() - MAX_HASH_CACHE_SIZE),
 			static_cast<u32>(s_hash_cache_purge_list.size()));
 		for (u32 i = 0; i < entries_to_purge; i++)
+		{
+#if GS_TEXTURE_COST_STATS
+			GS_TEXTURE_COST_INC(hc_evict_purge);
+			GSTextureCost::g_tc_evicted.Add(HashCacheKeyHash{}(s_hash_cache_purge_list[i].first->first), GSTextureCost::EvictedKeyRing::kEvictPurge);
+#endif
 			RemoveFromHashCache(s_hash_cache_purge_list[i].first);
+		}
 	}
+#if GS_TEXTURE_COST_STATS
+	GSTextureCost::g_tc_totals.hc_size_last = static_cast<std::uint64_t>(m_hash_cache.size());
+	GSTextureCost::g_tc_totals.hc_size_max = std::max<std::uint64_t>(GSTextureCost::g_tc_totals.hc_size_max, m_hash_cache.size());
+#endif
 }
 
 GSTextureCache::Target* GSTextureCache::Target::Create(GIFRegTEX0 TEX0, int w, int h, float scale, int type, bool clear)

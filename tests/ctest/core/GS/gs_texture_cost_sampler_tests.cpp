@@ -329,3 +329,70 @@ TEST(GSTextureCostBytesTest, PaddedPitchIgnored)
 	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(width, height, block_dim, bytes_per_block), 8u);
 }
 
+TEST(GSTextureCostEvictedRingTest, AddThenTakeReturnsTrueWithReasonAndSecondTakeFalse)
+{
+	GSTextureCost::EvictedKeyRing ring;
+	ring.Add(0x12345678ULL, GSTextureCost::EvictedKeyRing::kEvictAge);
+
+	std::uint8_t reason = 0;
+	EXPECT_TRUE(ring.Take(0x12345678ULL, &reason));
+	EXPECT_EQ(reason, GSTextureCost::EvictedKeyRing::kEvictAge);
+	EXPECT_FALSE(ring.Take(0x12345678ULL, &reason));
+}
+
+TEST(GSTextureCostEvictedRingTest, TakeUnknownKeyReturnsFalse)
+{
+	GSTextureCost::EvictedKeyRing ring;
+	ring.Add(0x1111ULL, GSTextureCost::EvictedKeyRing::kEvictPurge);
+
+	std::uint8_t reason = 0;
+	EXPECT_FALSE(ring.Take(0x2222ULL, &reason));
+}
+
+TEST(GSTextureCostEvictedRingTest, RingCapacityEvictionDropsOldestKey)
+{
+	GSTextureCost::EvictedKeyRing ring;
+	for (std::uint64_t i = 1; i <= 1025; ++i)
+		ring.Add(i, GSTextureCost::EvictedKeyRing::kEvictAge);
+
+	std::uint8_t reason = 0;
+	EXPECT_FALSE(ring.Take(1, &reason));
+
+	for (std::uint64_t i = 2; i <= 1025; ++i)
+	{
+		EXPECT_TRUE(ring.Take(i, &reason));
+		EXPECT_EQ(reason, GSTextureCost::EvictedKeyRing::kEvictAge);
+	}
+}
+
+TEST(GSTextureCostEvictedRingTest, TwoEqualKeysAddedTwiceAreTakenTwice)
+{
+	GSTextureCost::EvictedKeyRing ring;
+	const std::uint64_t key = 0xabcdefULL;
+	ring.Add(key, GSTextureCost::EvictedKeyRing::kEvictAge);
+	ring.Add(key, GSTextureCost::EvictedKeyRing::kEvictPurge);
+
+	std::uint8_t reason1 = 0;
+	std::uint8_t reason2 = 0;
+	EXPECT_TRUE(ring.Take(key, &reason1));
+	EXPECT_TRUE(ring.Take(key, &reason2));
+	EXPECT_FALSE(ring.Take(key, &reason1));
+
+	EXPECT_TRUE((reason1 == GSTextureCost::EvictedKeyRing::kEvictAge && reason2 == GSTextureCost::EvictedKeyRing::kEvictPurge) ||
+	            (reason1 == GSTextureCost::EvictedKeyRing::kEvictPurge && reason2 == GSTextureCost::EvictedKeyRing::kEvictAge));
+}
+
+TEST(GSTextureCostEvictedRingTest, TotalsNewFieldsDefaultToZero)
+{
+	GSTextureCost::Totals totals;
+	EXPECT_EQ(totals.hc_skip, 0u);
+	EXPECT_EQ(totals.hc_hits, 0u);
+	EXPECT_EQ(totals.hc_misses, 0u);
+	EXPECT_EQ(totals.hc_evict_age, 0u);
+	EXPECT_EQ(totals.hc_evict_purge, 0u);
+	EXPECT_EQ(totals.hc_size_last, 0u);
+	EXPECT_EQ(totals.hc_size_max, 0u);
+	EXPECT_EQ(totals.hc_recreated_age, 0u);
+	EXPECT_EQ(totals.hc_recreated_purge, 0u);
+}
+
