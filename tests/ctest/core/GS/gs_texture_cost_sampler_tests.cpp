@@ -320,13 +320,11 @@ TEST(GSTextureCostBytesTest, UncompressedLike)
 
 TEST(GSTextureCostBytesTest, PaddedPitchIgnored)
 {
-	// Document that a source pitch of 16 for a 4x4 BC1 rectangle still gives useful 8
-	// (source pitch does not enter the useful bytes formula).
+	// The source pitch does not enter the useful-byte formula.
 	const std::uint32_t width = 4;
 	const std::uint32_t height = 4;
 	const std::uint32_t block_dim = 4;
 	const std::uint32_t bytes_per_block = 8;
-	[[maybe_unused]] const std::uint32_t source_pitch = 16;
 
 	EXPECT_EQ(GSTextureCost::CompressedUsefulBytes(width, height, block_dim, bytes_per_block), 8u);
 }
