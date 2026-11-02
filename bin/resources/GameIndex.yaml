@@ -2869,6 +2869,7 @@ SCED-50041:
   region: "PAL-E"
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SCED-50065:
   name: "Official PlayStation 2 Magazine Demo 1"
   region: "PAL-M5"
@@ -4712,6 +4713,7 @@ SCES-50001:
   compat: 5
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SCES-50002:
   name: "FantaVision"
   region: "PAL-M5"
@@ -10859,6 +10861,7 @@ SCPS-56002:
   compat: 5
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SCPS-56003:
   name: "Jak & Daxter - 구세계의 유산"
   name-en: "Jak and Daxter - The Precursor Legacy"
@@ -54891,6 +54894,7 @@ SLPS-20015:
   compat: 5
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SLPS-20016:
   name: "ドリームオーディション"
   name-sort: "どりーむおーでぃしょん"
@@ -63486,6 +63490,7 @@ SLPS-71501:
   region: "NTSC-J"
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SLPS-71502:
   name: "リッジレーサーⅤ [MEGA HITS!]"
   name-sort: "りっじれーさー5 [MEGA HITS!]"
@@ -63582,6 +63587,7 @@ SLPS-73104:
   region: "NTSC-J"
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SLPS-73105:
   name: "キン肉マン ジェネレーションズ [PlayStation2 the Best]"
   name-sort: "きんにくまん じぇねれーしょんず [PlayStation2 the Best]"
@@ -64487,6 +64493,7 @@ SLUS-20001:
   compat: 5
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
+    mipmap: 0 # Reduces GPU texture sampling cost.
 SLUS-20002:
   name: "Ridge Racer V"
   region: "NTSC-U"
