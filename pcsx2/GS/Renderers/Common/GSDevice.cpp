@@ -610,8 +610,21 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 		std::clamp(height, 1, static_cast<int>(g_gs_device->GetMaxTextureSize())));
 	FastList<GSTexture*>& pool = m_pool[!GSTexture::IsTexture(usage)];
 
+#if GS_DIAG_UPLOAD_STATS
+	bool diag_from_pool = false;
+	if (GSTexture::IsTexture(usage))
+		GSUploadDiag::g_counters.fetches++;
+#endif
+#if GS_DIAG_UPLOAD_FRESH_DEST
+	if (GSTexture::IsTexture(usage))
+		GSUploadDiag::g_counters.armb_eligible++;
+#endif
+
 	GSTexture* t = nullptr;
 	auto fallback = pool.end();
+#if GS_DIAG_UPLOAD_FRESH_DEST
+	auto armb_first_busy_it = pool.end();
+#endif
 
 	for (auto i = pool.begin(); i != pool.end(); ++i)
 	{
@@ -623,9 +636,30 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 		{
 			if (prefer_reuse || t->GetLastFrameUsed() != m_frame)
 			{
+#if GS_DIAG_UPLOAD_FRESH_DEST
+				if (GSTexture::IsTexture(usage) && !t->DiagIsGpuIdle())
+				{
+					GSUploadDiag::g_counters.armb_busy_skips++;
+					if (armb_first_busy_it == pool.end())
+						armb_first_busy_it = i;
+				}
+				else
+				{
+#endif
 				m_pool_memory_usage -= t->GetMemUsage();
 				pool.erase(i);
+#if GS_DIAG_UPLOAD_STATS
+				if (GSTexture::IsTexture(usage))
+					diag_from_pool = true;
+#endif
+#if GS_DIAG_UPLOAD_FRESH_DEST
+				if (GSTexture::IsTexture(usage))
+					GSUploadDiag::g_counters.armb_taken++;
+#endif
 				break;
+#if GS_DIAG_UPLOAD_FRESH_DEST
+				}
+#endif
 			}
 			else if (fallback == pool.end())
 			{
@@ -636,6 +670,51 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 		t = nullptr;
 	}
 
+#if GS_DIAG_UPLOAD_FRESH_DEST
+	if (!t && armb_first_busy_it != pool.end())
+	{
+		// needs proper testing
+		const u32 bytes = static_cast<u32>(size.x) * static_cast<u32>(size.y) *
+			(format == GSTexture::Format::UNorm8 ? 1u : 4u);
+		if (GSUploadDiag::ArmBBudgetAllows(GSUploadDiag::g_counters.armb_fresh_bytes, bytes))
+		{
+			t = CreateSurface(usage, size.x, size.y, levels, format);
+			if (!t)
+			{
+				ERROR_LOG("GS: Memory allocation failure for {}x{} texture. Purging pool and retrying.", size.x, size.y);
+				PurgePool();
+				t = CreateSurface(usage, size.x, size.y, levels, format);
+				if (!t)
+				{
+					ERROR_LOG("GS: Memory allocation failure for {}x{} texture after purging pool.", size.x, size.y);
+					return nullptr;
+				}
+			}
+			GSUploadDiag::g_counters.armb_taken++;
+			GSUploadDiag::g_counters.armb_fresh++;
+			GSUploadDiag::g_counters.armb_fresh_bytes += bytes;
+#ifdef PCSX2_DEVBUILD
+			if (GSConfig.UseDebugDevice)
+			{
+				const TextureLabel label = GetTextureLabel(usage, format);
+				const u32 id = ++s_texture_counts[static_cast<u32>(label)];
+				t->SetDebugName(TinyString::from_format("{} {}", TextureLabelString(label), id));
+			}
+#endif
+		}
+		else
+		{
+			t = *armb_first_busy_it;
+			m_pool_memory_usage -= t->GetMemUsage();
+			pool.erase(armb_first_busy_it);
+			GSUploadDiag::g_counters.armb_fallbacks++;
+#if GS_DIAG_UPLOAD_STATS
+			diag_from_pool = true;
+#endif
+		}
+	}
+#endif
+
 	if (!t)
 	{
 		if (pool.size() >= (GSTexture::IsTexture(usage) ? MAX_POOLED_TEXTURES : MAX_POOLED_TARGETS) &&
@@ -644,6 +723,10 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 			t = *fallback;
 			m_pool_memory_usage -= t->GetMemUsage();
 			pool.erase(fallback);
+#if GS_DIAG_UPLOAD_STATS
+			if (GSTexture::IsTexture(usage))
+				diag_from_pool = true;
+#endif
 		}
 		else
 		{
@@ -670,6 +753,30 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 #endif
 		}
 	}
+
+#if GS_DIAG_UPLOAD_STATS
+	if (GSTexture::IsTexture(usage))
+	{
+		if (diag_from_pool)
+		{
+			GSUploadDiag::g_counters.fetch_reused++;
+			if (!t->DiagIsGpuIdle())
+			{
+				GSUploadDiag::g_counters.fetch_reused_busy++;
+				t->SetDiagDestWasBusy(true);
+			}
+			else
+			{
+				t->SetDiagDestWasBusy(false);
+			}
+		}
+		else
+		{
+			GSUploadDiag::g_counters.fetch_created++;
+			t->SetDiagDestWasBusy(false);
+		}
+	}
+#endif
 
 	if (t->IsRenderTarget())
 	{
@@ -698,6 +805,11 @@ void GSDevice::Recycle(GSTexture* t)
 	
 #ifdef PCSX2_DEVBUILD
 	t->SetDebugName("");
+#endif
+
+#if GS_DIAG_UPLOAD_STATS || GS_DIAG_UPLOAD_FRESH_DEST
+	if (t->IsTexture())
+		t->DiagMarkRecycled();
 #endif
 
 	FastList<GSTexture*>& pool = m_pool[!t->IsTexture()];

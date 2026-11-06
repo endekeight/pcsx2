@@ -172,7 +172,34 @@ GSTextureOGL::~GSTextureOGL()
 	}
 
 	glDeleteTextures(1, &m_texture_id);
+#if GS_DIAG_UPLOAD_STATS || GS_DIAG_UPLOAD_FRESH_DEST
+	if (m_diag_recycle_fence)
+		glDeleteSync(m_diag_recycle_fence);
+#endif
 }
+
+#if GS_DIAG_UPLOAD_STATS || GS_DIAG_UPLOAD_FRESH_DEST
+void GSTextureOGL::DiagMarkRecycled()
+{
+	if (m_diag_recycle_fence)
+		glDeleteSync(m_diag_recycle_fence);
+	m_diag_recycle_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+}
+
+bool GSTextureOGL::DiagIsGpuIdle()
+{
+	if (!m_diag_recycle_fence)
+		return true;
+	const GLenum res = glClientWaitSync(m_diag_recycle_fence, 0, 0);
+	if (res == GL_ALREADY_SIGNALED || res == GL_CONDITION_SATISFIED)
+	{
+		glDeleteSync(m_diag_recycle_fence);
+		m_diag_recycle_fence = nullptr;
+		return true;
+	}
+	return false;
+}
+#endif
 
 void* GSTextureOGL::GetNativeHandle() const
 {
@@ -213,20 +240,45 @@ bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int 
 	GLStreamBuffer* const sb = GSDeviceOGL::GetInstance()->GetTextureUploadBuffer();
 	if (IsCompressedFormat())
 	{
+#if GS_DIAG_UPLOAD_STATS
+		GSUploadDiag::g_counters.uploads++;
+		GSUploadDiag::g_counters.bytes += CalcUploadSize(r.height(), pitch);
+		GSUploadDiag::g_counters.uploads_compressed++;
+		if (m_diag_dest_was_busy)
+			GSUploadDiag::g_counters.uploads_into_busy_dest++;
+#endif
 		const u32 row_length = CalcUploadRowLengthFromPitch(pitch);
 		const u32 upload_size = CalcUploadSize(r.height(), pitch);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 		glCompressedTextureSubImage2D(m_texture_id, layer, r.x, r.y, r.width(), r.height(), m_int_format, upload_size, data);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	}
+#if GS_DIAG_UPLOAD_CLIENT_MEM
+	else if (true)
+#else
 	else if (!sb || map_size > sb->GetChunkSize())
+#endif
 	{
+#if GS_DIAG_UPLOAD_STATS
+		GSUploadDiag::g_counters.uploads++;
+		GSUploadDiag::g_counters.bytes += map_size;
+		GSUploadDiag::g_counters.uploads_client_mem++;
+		if (m_diag_dest_was_busy)
+			GSUploadDiag::g_counters.uploads_into_busy_dest++;
+#endif
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch >> m_int_shift);
 		glTextureSubImage2D(m_texture_id, layer, r.x, r.y, r.width(), r.height(), m_int_format, m_int_type, data);
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); // Restore default behavior
 	}
 	else
 	{
+#if GS_DIAG_UPLOAD_STATS
+		GSUploadDiag::g_counters.uploads++;
+		GSUploadDiag::g_counters.bytes += map_size;
+		GSUploadDiag::g_counters.uploads_stream++;
+		if (m_diag_dest_was_busy)
+			GSUploadDiag::g_counters.uploads_into_busy_dest++;
+#endif
 		const auto map = sb->Map(TEXTURE_UPLOAD_ALIGNMENT, map_size);
 		StringUtil::StrideMemCpy(map.pointer, preferred_pitch, data, pitch, r.width() << m_int_shift, r.height());
 		sb->Unmap(map_size);

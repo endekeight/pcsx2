@@ -5,6 +5,7 @@
 
 #include "common/EnumOps.h"
 #include "GS/GSVector.h"
+#include "GS/Renderers/Common/GSUploadDiag.h"
 
 #include <string>
 #include <string_view>
@@ -258,6 +259,13 @@ public:
 
 	// Helper routines for formats/types
 	static bool IsCompressedFormat(Format format) { return (format >= Format::BC1 && format <= Format::BC7); }
+
+#if GS_DIAG_UPLOAD_STATS || GS_DIAG_UPLOAD_FRESH_DEST
+	virtual void DiagMarkRecycled() {}
+	virtual bool DiagIsGpuIdle() { return true; }
+	bool m_diag_dest_was_busy = false;
+	void SetDiagDestWasBusy(bool busy) { m_diag_dest_was_busy = busy; }
+#endif
 };
 
 class GSDownloadTexture

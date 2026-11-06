@@ -35,6 +35,11 @@
 #include <chrono>
 #endif
 
+#if GS_DIAG_UPLOAD_STATS
+#include "common/Console.h"
+#include <chrono>
+#endif
+
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -619,6 +624,24 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_parse_stats.cf_flushes = 0;
 		m_parse_stats.vsyncs = 0;
 		m_parse_stats.last = now;
+	}
+#endif
+#if GS_DIAG_UPLOAD_STATS
+	static std::chrono::steady_clock::time_point s_upload_diag_last{};
+	static unsigned long long s_upload_diag_vsyncs = 0;
+	s_upload_diag_vsyncs++;
+	const auto upload_diag_now = std::chrono::steady_clock::now();
+	if (s_upload_diag_last == std::chrono::steady_clock::time_point{})
+	{
+		s_upload_diag_last = upload_diag_now;
+	}
+	else if (upload_diag_now - s_upload_diag_last >= std::chrono::seconds(1))
+	{
+		const auto upload_diag_ms = std::chrono::duration_cast<std::chrono::milliseconds>(upload_diag_now - s_upload_diag_last).count();
+		Console.WriteLn("%s", GSUploadDiag::FormatLine(GSUploadDiag::g_counters, static_cast<long long>(upload_diag_ms), s_upload_diag_vsyncs).c_str());
+		GSUploadDiag::Reset(GSUploadDiag::g_counters);
+		s_upload_diag_vsyncs = 0;
+		s_upload_diag_last = upload_diag_now;
 	}
 #endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))

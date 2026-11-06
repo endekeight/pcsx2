@@ -58,6 +58,12 @@ public:
 
 	__fi u32 GetID() { return m_texture_id; }
 	__fi u32 GetGLFormat() { return m_gl_format; }
+
+#if GS_DIAG_UPLOAD_STATS || GS_DIAG_UPLOAD_FRESH_DEST
+	void DiagMarkRecycled() override;
+	bool DiagIsGpuIdle() override;
+	GLsync m_diag_recycle_fence = nullptr;
+#endif
 };
 
 class GSDownloadTextureOGL final : public GSDownloadTexture
