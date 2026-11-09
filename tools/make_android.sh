@@ -30,6 +30,7 @@ LIBS_ROOT=../$ANDROID_PROJECT/app/src/main/cpp/libs
 LIBS_DIR=$LIBS_ROOT/arm64-v8a
 
 BUILD_DIR=build/arm64/android
+BUILD_DIR_16K=build/arm64/android-16k
 DEPS=deps/android
 OS=$(uname)
 NDK=28.0.12674087
@@ -99,6 +100,12 @@ fi
 # CMAKE_INSTALL_PREFIX is what places the headers, so it points at the header root.
 INSTALLDIR=$YAAPSECORE_LIBS
 
+# Builds the tree once for one host page size. The value is compiled in and sets how much
+# compiled EE code one write fault discards, so the app carries one library per page size.
+configure_and_build() {
+local build_dir=$1
+local page_size_flag=-DOVERRIDE_HOST_PAGE_SIZE=$2
+
 cmake   -DUSE_OPENGL=1 \
         -DUSE_VULKAN=1 \
         -DWEBP_ENABLE_SIMD=ON \
@@ -120,15 +127,20 @@ cmake   -DUSE_OPENGL=1 \
         -DCMAKE_C_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DCMAKE_CXX_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DQT_BUILD=OFF \
+        -DCMAKE_C_FLAGS="$page_size_flag" \
+        -DCMAKE_CXX_FLAGS="$page_size_flag" \
         -DCMAKE_PREFIX_PATH="$DIR/$DEPS" \
         -DCMAKE_TOOLCHAIN_FILE=$NDK_TOOLCHAIN_PATH \
         -DANDROID_PLATFORM=android-$ANDROID_SDK \
         -DANDROID_ABI=arm64-v8a \
         -DCMAKE_INSTALL_PREFIX="$INSTALLDIR" \
         "${ASAN_ARGS[@]}" \
-        -B $BUILD_DIR -G Ninja
+        -B "$build_dir" -G Ninja
 
-cmake --build $BUILD_DIR --parallel
+cmake --build "$build_dir" --parallel
+}
+
+configure_and_build "$BUILD_DIR" 0x1000
 ninja -C $BUILD_DIR install
 
 cp -f $BUILD_DIR/pcsx2/libpcsx2.a $LIBS_DIR/libpcsx2.a
@@ -156,6 +168,14 @@ cp -f $BUILD_DIR/3rdparty/libchdr/liblibchdr.a $LIBS_DIR/liblibchdr.a
 cp -f $BUILD_DIR/3rdparty/vixl/libvixl.a $LIBS_DIR/libvixl.a
 cp -f $BUILD_DIR/3rdparty/freesurround/libfreesurround.a $LIBS_DIR/libfreesurround.a
 cp -f $BUILD_DIR/3rdparty/demangler/libdemanglegnu.a $LIBS_DIR/libdemanglegnu.a
+
+# The 16 KB library. Only pcsx2 and common compile against the page size, so these are the
+# only archives that differ; both libraries share every third-party archive.
+rm -rf "$BUILD_DIR_16K"
+configure_and_build "$BUILD_DIR_16K" 0x4000
+mkdir -p $LIBS_DIR/16k
+cp -f $BUILD_DIR_16K/pcsx2/libpcsx2.a $LIBS_DIR/16k/libpcsx2.a
+cp -f $BUILD_DIR_16K/common/libcommon.a $LIBS_DIR/16k/libcommon.a
 
 if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
 	touch $LIBS_DIR/USE_ASAN
