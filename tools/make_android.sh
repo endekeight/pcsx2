@@ -96,21 +96,34 @@ if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
 	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON)
 fi
 
-# C128: shipping build options (assertions out, LTO, PGO).
-YAAPSE_ASSERTS_OFF="${YAAPSE_ASSERTS_OFF:-0}"
-YAAPSE_LTO="${YAAPSE_LTO:-0}"
-YAAPSE_PGO="${YAAPSE_PGO:-}"
+# C128: shipping build options (assertions out, LTO, PGO). The shipping build is
+# upstream's release build since C128 (arm B3: assertions out + LTO + profile use).
+# Defaults: YAAPSE_ASSERTS_OFF=1, YAAPSE_LTO=1, YAAPSE_PGO=use.
+# YAAPSE_ASSERTS_OFF=0, YAAPSE_LTO=0 and YAAPSE_PGO=off turn each part off;
+# YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off gives the pre-C128 build.
+# The profile lives outside git at .bridge/pgo/yaapse.profdata, recorded by
+# tools/pgo_profile.sh, regenerated before a release build and whenever a merged
+# task changes GS or yaapsecore sources.
+# With YAAPSE_ASAN=1, LTO and PGO default to off instead.
+YAAPSE_ASSERTS_OFF="${YAAPSE_ASSERTS_OFF:-1}"
+if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
+	YAAPSE_LTO="${YAAPSE_LTO:-0}"
+	YAAPSE_PGO="${YAAPSE_PGO:-off}"
+else
+	YAAPSE_LTO="${YAAPSE_LTO:-1}"
+	YAAPSE_PGO="${YAAPSE_PGO:-use}"
+fi
 YAAPSE_PGO_PROFILE="${YAAPSE_PGO_PROFILE:-}"
 
 if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
-	if [ "$YAAPSE_LTO" = "1" ] || [ -n "$YAAPSE_PGO" ]; then
+	if [ "$YAAPSE_LTO" = "1" ] || [ "$YAAPSE_PGO" = "generate" ] || [ "$YAAPSE_PGO" = "use" ]; then
 		echo "make_android.sh: YAAPSE_ASAN=1 cannot be combined with YAAPSE_LTO=1 or YAAPSE_PGO"
 		exit 1
 	fi
 fi
 
-if [ -n "$YAAPSE_PGO" ] && [ "$YAAPSE_PGO" != "generate" ] && [ "$YAAPSE_PGO" != "use" ]; then
-	echo "make_android.sh: invalid YAAPSE_PGO value '$YAAPSE_PGO' (expected 'generate' or 'use')"
+if [ "$YAAPSE_PGO" != "off" ] && [ "$YAAPSE_PGO" != "generate" ] && [ "$YAAPSE_PGO" != "use" ]; then
+	echo "make_android.sh: invalid YAAPSE_PGO value '$YAAPSE_PGO' (expected 'off', 'generate' or 'use')"
 	exit 1
 fi
 
@@ -157,7 +170,7 @@ elif [ "$YAAPSE_PGO" = "use" ]; then
 	fi
 
 	if [ ! -f "$PGO_PROFILE_ABS" ]; then
-		echo "make_android.sh: no profile at $PGO_PROFILE_ABS; building without a profile"
+		echo "make_android.sh: no profile at $PGO_PROFILE_ABS; building without a profile (link-time optimisation and release definitions still apply). Record one with tools/pgo_profile.sh"
 		PGO_MODE="off"
 		PGO_FLAGS=""
 		PGO_PROFILE_PATH=""
@@ -200,16 +213,16 @@ cmake   -DUSE_OPENGL=1 \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DUSE_BACKTRACE=0 \
-        `# RelWithDebInfo, not Debug: the shipping build compiles PCSX2's debug` \
-        `# assertions out (A15). PCSX2_DEVBUILD, PCSX2_DEBUG and _DEBUG come only` \
-        `# from $<$<CONFIG:Debug>:...> and change class layout - GSTexture gains a` \
+        `# RelWithDebInfo, not Debug: PCSX2_DEVBUILD, PCSX2_DEBUG and _DEBUG come` \
+        `# only from $<$<CONFIG:Debug>:...> and change class layout - GSTexture gains a` \
         `# member and a virtual under PCSX2_DEVBUILD - so AndroidSX2 and yaapsecore` \
-        `# must build RelWithDebInfo too. The flags repeat what Debug produced, with` \
-        `# no -DNDEBUG; VIXL_DEBUG is passed here because vixl sets it only for Debug.` \
+        `# must build RelWithDebInfo too. The default shipping build (YAAPSE_ASSERTS_OFF=1)` \
+        `# builds upstream's release definitions (NDEBUG, no VIXL_DEBUG).` \
+        `# For the YAAPSE_ASSERTS_OFF=0 build, the flags repeat what Debug produced,` \
+        `# with no -DNDEBUG; VIXL_DEBUG is passed here because vixl sets it only for Debug.` \
         `# Debug keeps its -O2 flags for debugging builds.` \
-        `# YAAPSE_ASSERTS_OFF=1 builds upstream's release definitions (NDEBUG,` \
-        `# no VIXL_DEBUG); the frontend and yaapsecore read the same choice from` \
-        `# BUILD_OPTIONS.cmake, because all three libraries must agree.` \
+        `# The frontend and yaapsecore read the same choice from BUILD_OPTIONS.cmake,` \
+        `# because all three libraries must agree.` \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_C_FLAGS_RELWITHDEBINFO="$RELWITHDEBINFO_C_FLAGS" \
         -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$RELWITHDEBINFO_CXX_FLAGS" \
