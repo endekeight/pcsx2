@@ -66,7 +66,6 @@ if [ -d "$YAAPSECORE_LIBS" ]; then
 else
 	mkdir -p $YAAPSECORE_LIBS
 fi
-mkdir -p $LIBS_DIR
 mkdir -p $LIBS_INCLUDE
 
 if [ "$OS" = "Linux" ]; then
@@ -97,6 +96,93 @@ if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
 	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON)
 fi
 
+# C128: shipping build options (assertions out, LTO, PGO).
+YAAPSE_ASSERTS_OFF="${YAAPSE_ASSERTS_OFF:-0}"
+YAAPSE_LTO="${YAAPSE_LTO:-0}"
+YAAPSE_PGO="${YAAPSE_PGO:-}"
+YAAPSE_PGO_PROFILE="${YAAPSE_PGO_PROFILE:-}"
+
+if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
+	if [ "$YAAPSE_LTO" = "1" ] || [ -n "$YAAPSE_PGO" ]; then
+		echo "make_android.sh: YAAPSE_ASAN=1 cannot be combined with YAAPSE_LTO=1 or YAAPSE_PGO"
+		exit 1
+	fi
+fi
+
+if [ -n "$YAAPSE_PGO" ] && [ "$YAAPSE_PGO" != "generate" ] && [ "$YAAPSE_PGO" != "use" ]; then
+	echo "make_android.sh: invalid YAAPSE_PGO value '$YAAPSE_PGO' (expected 'generate' or 'use')"
+	exit 1
+fi
+
+if [ "$YAAPSE_ASSERTS_OFF" = "1" ]; then
+	RELWITHDEBINFO_C_FLAGS="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DNDEBUG"
+	RELWITHDEBINFO_CXX_FLAGS="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DNDEBUG"
+	ASSERTS_OFF_CMAKE="ON"
+else
+	RELWITHDEBINFO_C_FLAGS="-fno-limit-debug-info -g -O2 -fno-strict-aliasing"
+	RELWITHDEBINFO_CXX_FLAGS="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DVIXL_DEBUG"
+	ASSERTS_OFF_CMAKE="OFF"
+fi
+
+LTO_ARGS=()
+if [ "$YAAPSE_LTO" = "1" ]; then
+	LTO_ARGS=(-DLTO_PCSX2_CORE=ON)
+	LTO_CMAKE="ON"
+else
+	LTO_CMAKE="OFF"
+fi
+
+PGO_MODE="off"
+PGO_FLAGS=""
+PGO_PROFILE_PATH=""
+PGO_PROFILE_ID=""
+
+if [ "$YAAPSE_PGO" = "generate" ]; then
+	PGO_MODE="generate"
+	PGO_FLAGS="-fprofile-generate"
+elif [ "$YAAPSE_PGO" = "use" ]; then
+	if [ -n "$YAAPSE_PGO_PROFILE" ]; then
+		if [[ "$YAAPSE_PGO_PROFILE" = /* ]]; then
+			PGO_PROFILE_ABS="$YAAPSE_PGO_PROFILE"
+		else
+			PGO_PROFILE_DIR="$(dirname "$YAAPSE_PGO_PROFILE")"
+			if [ -d "$PGO_PROFILE_DIR" ]; then
+				PGO_PROFILE_ABS="$(cd "$PGO_PROFILE_DIR" && pwd)/$(basename "$YAAPSE_PGO_PROFILE")"
+			else
+				PGO_PROFILE_ABS="$(pwd)/$YAAPSE_PGO_PROFILE"
+			fi
+		fi
+	else
+		PGO_PROFILE_ABS="$(cd "$DIR/.." && pwd)/.bridge/pgo/yaapse.profdata"
+	fi
+
+	if [ ! -f "$PGO_PROFILE_ABS" ]; then
+		echo "make_android.sh: no profile at $PGO_PROFILE_ABS; building without a profile"
+		PGO_MODE="off"
+		PGO_FLAGS=""
+		PGO_PROFILE_PATH=""
+		PGO_PROFILE_ID=""
+	else
+		PGO_MODE="use"
+		PGO_FLAGS="-fprofile-use=$PGO_PROFILE_ABS -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date -Wno-backend-plugin"
+		PGO_PROFILE_PATH="$PGO_PROFILE_ABS"
+		PGO_PROFILE_ID="$(shasum -a 256 "$PGO_PROFILE_ABS" | cut -c1-16)"
+	fi
+fi
+
+mkdir -p $LIBS_DIR
+
+cat > "$LIBS_DIR/BUILD_OPTIONS.cmake" <<EOF
+# Written by pcsx2/tools/make_android.sh on every run. Do not edit.
+set(YAAPSE_ARCHIVES_ASSERTS_OFF $ASSERTS_OFF_CMAKE)
+set(YAAPSE_ARCHIVES_LTO $LTO_CMAKE)
+set(YAAPSE_ARCHIVES_PGO "$PGO_MODE")
+set(YAAPSE_ARCHIVES_PGO_PROFILE "$PGO_PROFILE_PATH")
+set(YAAPSE_ARCHIVES_PGO_PROFILE_ID "$PGO_PROFILE_ID")
+EOF
+
+echo "make_android.sh: build options asserts_off=$ASSERTS_OFF_CMAKE lto=$LTO_CMAKE pgo=$PGO_MODE profile=${PGO_PROFILE_PATH:-none} id=${PGO_PROFILE_ID:-none}"
+
 # CMAKE_INSTALL_PREFIX is what places the headers, so it points at the header root.
 INSTALLDIR=$YAAPSECORE_LIBS
 
@@ -121,20 +207,24 @@ cmake   -DUSE_OPENGL=1 \
         `# must build RelWithDebInfo too. The flags repeat what Debug produced, with` \
         `# no -DNDEBUG; VIXL_DEBUG is passed here because vixl sets it only for Debug.` \
         `# Debug keeps its -O2 flags for debugging builds.` \
+        `# YAAPSE_ASSERTS_OFF=1 builds upstream's release definitions (NDEBUG,` \
+        `# no VIXL_DEBUG); the frontend and yaapsecore read the same choice from` \
+        `# BUILD_OPTIONS.cmake, because all three libraries must agree.` \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_C_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing" \
-        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-fno-limit-debug-info -g -O2 -fno-strict-aliasing -DVIXL_DEBUG" \
+        -DCMAKE_C_FLAGS_RELWITHDEBINFO="$RELWITHDEBINFO_C_FLAGS" \
+        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$RELWITHDEBINFO_CXX_FLAGS" \
         -DCMAKE_C_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DCMAKE_CXX_FLAGS_DEBUG="-g -O2 -fno-strict-aliasing" \
         -DQT_BUILD=OFF \
-        -DCMAKE_C_FLAGS="$page_size_flag" \
-        -DCMAKE_CXX_FLAGS="$page_size_flag" \
+        -DCMAKE_C_FLAGS="$page_size_flag${PGO_FLAGS:+ $PGO_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="$page_size_flag${PGO_FLAGS:+ $PGO_FLAGS}" \
         -DCMAKE_PREFIX_PATH="$DIR/$DEPS" \
         -DCMAKE_TOOLCHAIN_FILE=$NDK_TOOLCHAIN_PATH \
         -DANDROID_PLATFORM=android-$ANDROID_SDK \
         -DANDROID_ABI=arm64-v8a \
         -DCMAKE_INSTALL_PREFIX="$INSTALLDIR" \
         "${ASAN_ARGS[@]}" \
+        "${LTO_ARGS[@]}" \
         -B "$build_dir" -G Ninja
 
 cmake --build "$build_dir" --parallel
@@ -169,6 +259,10 @@ cp -f $BUILD_DIR/3rdparty/vixl/libvixl.a $LIBS_DIR/libvixl.a
 cp -f $BUILD_DIR/3rdparty/freesurround/libfreesurround.a $LIBS_DIR/libfreesurround.a
 cp -f $BUILD_DIR/3rdparty/demangler/libdemanglegnu.a $LIBS_DIR/libdemanglegnu.a
 
+if [ "$YAAPSE_LTO" = "1" ]; then
+	cp -f $BUILD_DIR/pcsx2/libPCSX2_LTO.a $LIBS_DIR/libpcsx2_lto.a
+fi
+
 # The 16 KB library. Only pcsx2 and common compile against the page size, so these are the
 # only archives that differ; both libraries share every third-party archive.
 rm -rf "$BUILD_DIR_16K"
@@ -176,6 +270,10 @@ configure_and_build "$BUILD_DIR_16K" 0x4000
 mkdir -p $LIBS_DIR/16k
 cp -f $BUILD_DIR_16K/pcsx2/libpcsx2.a $LIBS_DIR/16k/libpcsx2.a
 cp -f $BUILD_DIR_16K/common/libcommon.a $LIBS_DIR/16k/libcommon.a
+
+if [ "$YAAPSE_LTO" = "1" ]; then
+	cp -f $BUILD_DIR_16K/pcsx2/libPCSX2_LTO.a $LIBS_DIR/16k/libpcsx2_lto.a
+fi
 
 if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
 	touch $LIBS_DIR/USE_ASAN
