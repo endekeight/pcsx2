@@ -1512,11 +1512,11 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 #else
 #if GS_KICK_CHUNKED
 	// needs proper testing
-	if constexpr (prim == GS_TRIANGLESTRIP && !auto_flush)
+	if constexpr (prim == GS_TRIANGLESTRIP)
 	{
 		if (size >= 18 && !GSConfig.UserHacks_DrawBuffering)
 		{
-			KickTriangleStripChunkedSTQRGBAXYZF2(r, size);
+			KickTriangleStripChunkedSTQRGBAXYZF2<auto_flush>(r, size);
 			return;
 		}
 	}
@@ -1551,6 +1551,7 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 
 #if GS_KICK_CHUNKED
 // needs proper testing
+template <bool auto_flush>
 void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	u32 remaining = size / 3;
@@ -1602,6 +1603,29 @@ void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT 
 		deferred_slot = 0;
 	};
 
+	const auto step_one_vertex = [&]()
+	{
+		const GSVector4i st = GSVector4i::loadl(&cur_r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&cur_r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&cur_r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
+
+		m_v.m[0] = st.upl64(rgba.upl32(q));
+
+		GSVector4i xy = GSVector4i::loadl(&cur_r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&cur_r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf);
+
+		VertexKick<GS_TRIANGLESTRIP, auto_flush>(cur_r[2].XYZF2.Skip());
+
+		cur_r += 3;
+		remaining--;
+	};
+
 	while (remaining > 0)
 	{
 		const u32 vtx_limit = std::min<u32>(m_max_vertex_count, max_prim_vertices);
@@ -1625,31 +1649,36 @@ void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT 
 			}
 #endif
 			flush_deferred_trailing();
-
-			const GSVector4i st = GSVector4i::loadl(&cur_r[0].U64[0]);
-			GSVector4i q = GSVector4i::loadl(&cur_r[0].U64[1]);
-			const GSVector4i rgba = (GSVector4i::load<false>(&cur_r[1]) & GSVector4i::x000000ff()).ps32().pu16();
-
-			q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
-
-			m_v.m[0] = st.upl64(rgba.upl32(q));
-
-			GSVector4i xy = GSVector4i::loadl(&cur_r[2].U64[0]);
-			GSVector4i zf = GSVector4i::loadl(&cur_r[2].U64[1]);
-			xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
-			zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
-
-			m_v.m[1] = xy.upl32(zf);
-
-			VertexKick<GS_TRIANGLESTRIP, false>(cur_r[2].XYZF2.Skip());
-
-			cur_r += 3;
-			remaining--;
+			step_one_vertex();
 			continue;
+		}
+
+		if constexpr (auto_flush)
+		{
+			const GSHWAutoFlushLevel af_level = GSIsHardwareRenderer()
+				? GSConfig.UserHacks_AutoFlush
+				: GSHWAutoFlushLevel::Enabled;
+			if (!GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(*PRIM, *m_context, af_level))
+			{
+#if GS_KICK_VERIFY
+				if (count_stats)
+				{
+					m_kv.chunk_bail_verts += chunk_count;
+					m_kv.chunk_bail_autoflush += chunk_count;
+					chunk_converted_verts += chunk_count;
+				}
+#endif
+				flush_deferred_trailing();
+				for (u32 step = 0; step < chunk_count; ++step)
+					step_one_vertex();
+				continue;
+			}
 		}
 
 #if GS_PARSE_STATS
 		m_parse_stats.kicks += chunk_count;
+		if constexpr (auto_flush)
+			m_parse_stats.af_kicks += chunk_count;
 #endif
 
 		const u32 pending = (m_vertex->tail >= m_vertex->head) ? (m_vertex->tail - m_vertex->head) : 0;
@@ -1960,11 +1989,11 @@ void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
 {
 #if GS_KICK_CHUNKED
 	// needs proper testing
-	if constexpr (prim == GS_TRIANGLESTRIP && !auto_flush)
+	if constexpr (prim == GS_TRIANGLESTRIP)
 	{
 		if (size >= 18 && !GSConfig.UserHacks_DrawBuffering)
 		{
-			KickTriangleStripChunkedSTQRGBAXYZF2(r, size);
+			KickTriangleStripChunkedSTQRGBAXYZF2<auto_flush>(r, size);
 #if GS_KICK_VERIFY_MUTATE
 			if (m_kv.recording)
 				m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));

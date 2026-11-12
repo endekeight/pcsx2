@@ -85,7 +85,7 @@ private:
 
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
 #if GS_KICK_CHUNKED
-	void KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+	template<bool auto_flush> void KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
 #endif
 #if GS_KICK_VERIFY
 	template <u32 prim, bool auto_flush>
@@ -240,6 +240,7 @@ protected:
 		u64 chunk_verts = 0;
 		u64 chunk_unconverted = 0;
 		u64 chunk_bail_verts = 0;
+		u64 chunk_bail_autoflush = 0;
 		u64 chunk_bail_small = 0;
 		u64 chunk_bail_drawbuf = 0;
 		u64 chunk_bail_remainder = 0;

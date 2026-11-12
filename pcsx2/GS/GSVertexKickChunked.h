@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include "GS/GSDrawingContext.h"
 #include "GS/GSRegs.h"
 #include "GS/GSVector.h"
 #include "GS/Renderers/Common/GSVertex.h"
+#include "pcsx2/Config.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -448,6 +450,190 @@ inline void ConvertVertexRange(
 	u32 slot = dst_slot;
 	for (u32 i = from_idx; i < to_idx; ++i, ++slot)
 		ConvertPackedSTQRGBAXYZF2Vertex(r + 3 * i, uv, depth_limit, vtx_buff[slot]);
+}
+
+inline constexpr u32 FrameSwizzleMask(u32 psm)
+{
+	switch (psm)
+	{
+		case PSMCT24:
+		case PSGPU24:
+		case PSMZ24:
+			return 0x00FFFFFFu;
+		case PSMCT16:
+		case PSMCT16S:
+		case PSMZ16:
+		case PSMZ16S:
+			return 0x80F8F8F8u;
+		case PSMT8H:
+			return 0xFF000000u;
+		case PSMT4HL:
+			return 0x0F000000u;
+		case PSMT4HH:
+			return 0xF0000000u;
+		default:
+			return 0xFFFFFFFFu;
+	}
+}
+
+inline constexpr u32 ChannelMaskForPSM(u32 spsm)
+{
+	switch (spsm)
+	{
+		case PSMCT24:
+		case PSMZ24:
+			return 0x7u;
+		case PSMT8H:
+		case PSMT4HH:
+		case PSMT4HL:
+			return 0x8u;
+		default:
+			return 0xFu;
+	}
+}
+
+inline constexpr u32 ChannelMaskForPSM(u32 spsm, u32 fbmsk)
+{
+	u32 mask = ChannelMaskForPSM(spsm);
+	mask &= ((fbmsk & 0xFFu) == 0xFFu) ? (~0x1u & 0xFu) : 0xFu;
+	mask &= ((fbmsk & 0xFF00u) == 0xFF00u) ? (~0x2u & 0xFu) : 0xFu;
+	mask &= ((fbmsk & 0xFF0000u) == 0xFF0000u) ? (~0x4u & 0xFu) : 0xFu;
+	mask &= ((fbmsk & 0xFF000000u) == 0xFF000000u) ? (~0x8u & 0xFu) : 0xFu;
+	return mask;
+}
+
+inline constexpr bool FormatsHaveDisjointBits(u32 spsm, u32 dpsm)
+{
+	const auto is_24bit = [](u32 psm) { return psm == PSMCT24 || psm == PSMZ24; };
+	const auto is_high8 = [](u32 psm) { return psm == PSMT8H || psm == PSMT4HL || psm == PSMT4HH; };
+	if ((is_24bit(dpsm) && is_high8(spsm)) || (is_high8(dpsm) && is_24bit(spsm)))
+		return true;
+	if ((dpsm == PSMT4HL && spsm == PSMT4HH) || (dpsm == PSMT4HH && spsm == PSMT4HL))
+		return true;
+	return false;
+}
+
+inline constexpr bool HasSharedBitsForPSM(u32 sbp, u32 spsm, u32 dbp, u32 dpsm)
+{
+	return sbp == dbp && !FormatsHaveDisjointBits(spsm, dpsm);
+}
+
+inline GIFRegTEX0 GetTex0LayerForContext(const GSDrawingContext& ctx, u32 lod)
+{
+	if (lod == 0)
+		return ctx.TEX0;
+
+	GIFRegTEX0 TEX0 = ctx.TEX0;
+	switch (lod)
+	{
+		case 1:
+			TEX0.TBP0 = ctx.MIPTBP1.TBP1;
+			TEX0.TBW = ctx.MIPTBP1.TBW1;
+			break;
+		case 2:
+			TEX0.TBP0 = ctx.MIPTBP1.TBP2;
+			TEX0.TBW = ctx.MIPTBP1.TBW2;
+			break;
+		case 3:
+			TEX0.TBP0 = ctx.MIPTBP1.TBP3;
+			TEX0.TBW = ctx.MIPTBP1.TBW3;
+			break;
+		case 4:
+			TEX0.TBP0 = ctx.MIPTBP2.TBP4;
+			TEX0.TBW = ctx.MIPTBP2.TBW4;
+			break;
+		case 5:
+			TEX0.TBP0 = ctx.MIPTBP2.TBP5;
+			TEX0.TBW = ctx.MIPTBP2.TBW5;
+			break;
+		case 6:
+			TEX0.TBP0 = ctx.MIPTBP2.TBP6;
+			TEX0.TBW = ctx.MIPTBP2.TBW6;
+			break;
+		default:
+			break;
+	}
+
+	if (TEX0.TH <= lod)
+		TEX0.TH = 0;
+	else
+		TEX0.TH -= lod;
+
+	if (TEX0.TW <= lod)
+		TEX0.TW = 0;
+	else
+		TEX0.TW -= lod;
+
+	return TEX0;
+}
+
+inline bool CanChunkTriangleStripUnderAutoFlush(
+	const GIFRegPRIM& prim,
+	const GSDrawingContext& ctx,
+	GSHWAutoFlushLevel auto_flush_level)
+{
+	if (!prim.TME || auto_flush_level == GSHWAutoFlushLevel::SpritesOnly)
+		return true;
+
+	const u32 fmsk = FrameSwizzleMask(ctx.FRAME.PSM);
+	if (!(ChannelMaskForPSM(ctx.TEX0.PSM) &
+	      ChannelMaskForPSM(ctx.FRAME.PSM, ctx.FRAME.FBMSK | ~fmsk)))
+		return true;
+
+	bool frame_addr_hit = false;
+	bool zbuf_addr_hit = false;
+	const bool possible_mip_map = ctx.TEX1.MXL > 0 && ctx.TEX1.MMIN >= 2 && ctx.TEX1.MMIN <= 5;
+	int min_possible_layer = 0;
+	int max_possible_layer = 0;
+	if (possible_mip_map)
+	{
+		if (ctx.TEX1.MXL > 6)
+			return false;
+
+		const int mxl = static_cast<int>(ctx.TEX1.MXL);
+		if (ctx.TEX1.LCM)
+		{
+			min_possible_layer = std::clamp(ctx.TEX1.K >> 4, 0, mxl);
+			max_possible_layer = std::clamp((ctx.TEX1.K + 0xF) >> 4, 0, mxl);
+		}
+		else
+		{
+			max_possible_layer = mxl;
+		}
+	}
+
+	GIFRegTEX0 TEX0_hit = {};
+	const u32 frame_block = ctx.FRAME.Block();
+	const u32 zbuf_block = ctx.ZBUF.Block();
+	for (int tex_layer = min_possible_layer; tex_layer <= max_possible_layer; ++tex_layer)
+	{
+		TEX0_hit = GetTex0LayerForContext(ctx, static_cast<u32>(tex_layer));
+		if (TEX0_hit.TBP0 == frame_block)
+		{
+			frame_addr_hit = true;
+			break;
+		}
+		if (TEX0_hit.TBP0 == zbuf_block)
+		{
+			zbuf_addr_hit = true;
+			break;
+		}
+	}
+
+	const bool frame_hit = frame_addr_hit &&
+	                       !(ctx.TEST.ATE && ctx.TEST.ATST == 0 && ctx.TEST.AFAIL == 2) &&
+	                       ((ctx.FRAME.FBMSK & fmsk) != fmsk);
+	const bool z_needed = !(ctx.TEST.ATE && ctx.TEST.ATST == 0 && ctx.TEST.AFAIL != 2) && !ctx.ZBUF.ZMSK;
+	const bool zbuf_hit = zbuf_addr_hit && z_needed;
+	if (!frame_hit && !zbuf_hit)
+		return true;
+
+	const u32 frame_z_psm = frame_hit ? ctx.FRAME.PSM : ctx.ZBUF.PSM;
+	const u32 frame_z_bp = frame_hit ? frame_block : zbuf_block;
+	if (!HasSharedBitsForPSM(frame_z_bp, frame_z_psm, TEX0_hit.TBP0, TEX0_hit.PSM))
+		return true;
+
+	return false;
 }
 
 } // namespace GSChunkedKick
