@@ -17,6 +17,15 @@ class GSHwHack;
 // disabling caching between draws.
 //#define DISABLE_HW_TEXTURE_CACHE
 
+// Count-only texture-cache lookup shortcut would-hits for the GSTCLOOKUP line.
+#ifndef GS_TC_LOOKUP_STATS
+#define GS_TC_LOOKUP_STATS 0
+#endif
+
+#if GS_TC_LOOKUP_STATS
+#include <chrono>
+#endif
+
 class GSTextureCache
 {
 public:
@@ -252,6 +261,11 @@ public:
 		float OffsetHack_modxy = 0.0f;
 		GSDirtyRectList m_dirty;
 		GSVector4i m_valid{};
+#if GS_TC_LOOKUP_STATS
+		bool m_end_of_valid_known = false;
+		u32 m_end_of_valid_layout = 0;
+		GSVector4i m_end_of_valid_rect{};
+#endif
 		GSVector4i m_drawn_since_read{};
 		int readbacks_since_draw = 0;
 
@@ -614,6 +628,54 @@ public:
 
 	/// Injects a texture into the hash cache, by using GSTexture::Swap(), transitively applying to all sources. Ownership of tex is transferred.
 	void InjectHashCacheTexture(const HashCacheKey& key, GSTexture* tex, const std::pair<u8, u8>& alpha_minmax);
+
+#if GS_TC_LOOKUP_STATS
+	enum LookupStatsSite : u32
+	{
+		LOOKUP_STATS_SITE_OTHER = 0,
+		LOOKUP_STATS_SITE_DRAW_RT = 1,
+		LOOKUP_STATS_SITE_DRAW_DS = 2,
+		LOOKUP_STATS_SITE_DRAW_IVM = 3,
+	};
+
+	struct LookupStats
+	{
+		u64 ldt = 0;
+		u64 ldt_rt = 0;
+		u64 ldt_ds = 0;
+		u64 ldt_other = 0;
+		u64 ldt_front = 0;
+		u64 ldt_walk_sum = 0;
+		u64 ldt_refuse_bp = 0;
+		u64 ldt_refuse_bw = 0;
+		u64 ldt_refuse_psm = 0;
+		u64 ldt_refuse_scale = 0;
+		u64 ldt_refuse_rgb = 0;
+		u64 ldt_refuse_ow = 0;
+		u64 ldt_empty = 0;
+		u64 ivm = 0;
+		u64 ivm_tf = 0;
+		u64 ivm_tt = 0;
+		u64 ivm_tf_draw = 0;
+		u64 ivm_tf_other = 0;
+		u64 ivm_tf_empty = 0;
+		u64 ivm_tf_pages_sum = 0;
+		u64 ivm_tf_src_sum = 0;
+		u64 ivm_type = 0;
+		u64 eov = 0;
+		u64 eov_uv = 0;
+		u64 eov_rv = 0;
+		u64 eov_same = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	LookupStats m_lookup_stats{};
+	u32 m_lookup_stats_site = LOOKUP_STATS_SITE_OTHER;
+	bool m_lookup_stats_ivm_tf = false;
+	u64 m_lookup_stats_tf_src_this = 0;
+
+	void PrintLookupStatsIfDue();
+#endif
 };
 
 extern std::unique_ptr<GSTextureCache> g_texture_cache;

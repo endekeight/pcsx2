@@ -2433,10 +2433,88 @@ void GSTextureCache::RescaleHelper::SetNewSize(const GSVector2i& new_size, float
 	m_new_scaled_size = ScaleRenderTargetSize(new_size, scale);
 }
 
+#if GS_TC_LOOKUP_STATS
+void GSTextureCache::PrintLookupStatsIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_lookup_stats.last == std::chrono::steady_clock::time_point{})
+	{
+		m_lookup_stats.last = now;
+		return;
+	}
+	if (now - m_lookup_stats.last < std::chrono::seconds(1))
+		return;
+
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lookup_stats.last).count();
+	Console.WriteLn("GSTCLOOKUP: ms=%lld ldt=%llu ldt_rt=%llu ldt_ds=%llu ldt_other=%llu ldt_front=%llu ldt_walk_sum=%llu ldt_refuse_bp=%llu ldt_refuse_bw=%llu ldt_refuse_psm=%llu ldt_refuse_scale=%llu ldt_refuse_rgb=%llu ldt_refuse_ow=%llu ldt_empty=%llu ivm=%llu ivm_tf=%llu ivm_tt=%llu ivm_tf_draw=%llu ivm_tf_other=%llu ivm_tf_empty=%llu ivm_tf_pages_sum=%llu ivm_tf_src_sum=%llu ivm_type=%llu eov=%llu eov_uv=%llu eov_rv=%llu eov_same=%llu",
+		static_cast<long long>(ms),
+		static_cast<unsigned long long>(m_lookup_stats.ldt),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_rt),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_ds),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_other),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_front),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_walk_sum),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_bp),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_bw),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_psm),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_scale),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_rgb),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_refuse_ow),
+		static_cast<unsigned long long>(m_lookup_stats.ldt_empty),
+		static_cast<unsigned long long>(m_lookup_stats.ivm),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tt),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf_draw),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf_other),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf_empty),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf_pages_sum),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_tf_src_sum),
+		static_cast<unsigned long long>(m_lookup_stats.ivm_type),
+		static_cast<unsigned long long>(m_lookup_stats.eov),
+		static_cast<unsigned long long>(m_lookup_stats.eov_uv),
+		static_cast<unsigned long long>(m_lookup_stats.eov_rv),
+		static_cast<unsigned long long>(m_lookup_stats.eov_same));
+	m_lookup_stats = {};
+	m_lookup_stats.last = now;
+}
+#endif
+
 GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const GSVector2i& size, float scale, int type,
 	bool used, u32 fbmask, bool preload, bool preserve_rgb, bool preserve_alpha, const GSVector4i draw_rect,
 	bool is_shuffle, bool possible_clear, bool preserve_scale, GSTextureCache::Source* src, GSTextureCache::Target* ds, int offset)
 {
+#if GS_TC_LOOKUP_STATS
+	m_lookup_stats.ldt++;
+	if (m_lookup_stats_site == LOOKUP_STATS_SITE_DRAW_RT)
+		m_lookup_stats.ldt_rt++;
+	else if (m_lookup_stats_site == LOOKUP_STATS_SITE_DRAW_DS)
+		m_lookup_stats.ldt_ds++;
+	else
+		m_lookup_stats.ldt_other++;
+
+	if (m_dst[type].empty())
+	{
+		m_lookup_stats.ldt_empty++;
+	}
+	else
+	{
+		Target* head = *m_dst[type].begin();
+		if (head->m_TEX0.TBP0 != TEX0.TBP0)
+			m_lookup_stats.ldt_refuse_bp++;
+		else if (head->m_TEX0.TBW != TEX0.TBW)
+			m_lookup_stats.ldt_refuse_bw++;
+		else if (head->m_TEX0.PSM != TEX0.PSM)
+			m_lookup_stats.ldt_refuse_psm++;
+		else if (head->m_scale != scale)
+			m_lookup_stats.ldt_refuse_scale++;
+		else if (!head->m_valid_rgb)
+			m_lookup_stats.ldt_refuse_rgb++;
+		else if (!preserve_rgb && !preserve_alpha && draw_rect.rintersect(head->m_valid).eq(head->m_valid))
+			m_lookup_stats.ldt_refuse_ow++;
+		else
+			m_lookup_stats.ldt_front++;
+	}
+#endif
 	const GSLocalMemory::psm_t& psm_s = GSLocalMemory::m_psm[TEX0.PSM];
 	const u32 bp = TEX0.TBP0;
 	
@@ -2458,6 +2536,9 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		list = &m_dst[iteration == 0 ? type : (1 - type)];
 		for (auto i = list->begin(); i != list->end();)
 		{
+#if GS_TC_LOOKUP_STATS
+			m_lookup_stats.ldt_walk_sum++;
+#endif
 			Target* t = *i;
 			if (bp == t->m_TEX0.TBP0)
 			{
@@ -4668,6 +4749,9 @@ void GSTextureCache::InvalidateContainedTargets(u32 start_bp, u32 end_bp, u32 wr
 // must invalidate the Target/Depth respectively
 void GSTextureCache::InvalidateVideoMemType(int type, u32 bp, u32 write_psm, u32 write_fbmsk, bool dirty_only)
 {
+#if GS_TC_LOOKUP_STATS
+	m_lookup_stats.ivm_type++;
+#endif
 	auto& list = m_dst[type];
 	for (auto i = list.begin(); i != list.end(); ++i)
 	{
@@ -4728,6 +4812,23 @@ void GSTextureCache::InvalidateVideoMemType(int type, u32 bp, u32 write_psm, u32
 // Called each time you want to write to the GS memory
 void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& rect, bool target)
 {
+#if GS_TC_LOOKUP_STATS
+	m_lookup_stats.ivm++;
+	m_lookup_stats_ivm_tf = !target;
+	m_lookup_stats_tf_src_this = 0;
+	if (target)
+	{
+		m_lookup_stats.ivm_tt++;
+	}
+	else
+	{
+		m_lookup_stats.ivm_tf++;
+		if (m_lookup_stats_site == LOOKUP_STATS_SITE_DRAW_IVM)
+			m_lookup_stats.ivm_tf_draw++;
+		else
+			m_lookup_stats.ivm_tf_other++;
+	}
+#endif
 	const u32 bp = off.bp();
 	const u32 bw = off.bw();
 	const u32 psm = off.psm();
@@ -4745,9 +4846,16 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 		/// rendering will dirty the copy
 		for (int pgs = 0; pgs < pages; pgs++)
 		{
+#if GS_TC_LOOKUP_STATS
+			m_lookup_stats.ivm_tf_pages_sum++;
+#endif
 			auto& list = m_src.m_map[((bp >> 5) + pgs) & 0x1ff];
 			for (auto i = list.begin(); i != list.end();)
 			{
+#if GS_TC_LOOKUP_STATS
+				m_lookup_stats.ivm_tf_src_sum++;
+				m_lookup_stats_tf_src_this++;
+#endif
 				Source* s = *i;
 				++i;
 
@@ -4765,8 +4873,15 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 				// Target Page (8KB) have always a width of 64 pixels
 				// Half of the Target is TBW/2 pages * 8KB / (1 block * 256B) = 0x10
 				auto& list = m_src.m_map[bbp >> 5];
+#if GS_TC_LOOKUP_STATS
+				m_lookup_stats.ivm_tf_pages_sum++;
+#endif
 				for (auto i = list.begin(); i != list.end();)
 				{
+#if GS_TC_LOOKUP_STATS
+					m_lookup_stats.ivm_tf_src_sum++;
+					m_lookup_stats_tf_src_this++;
+#endif
 					Source* s = *i;
 					++i;
 
@@ -4785,9 +4900,20 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 	GSVector4i r = rect;
 
 	off.loopPages(rect, [this, &rect, bp, bw, psm, &found](u32 page) {
+#if GS_TC_LOOKUP_STATS
+		if (m_lookup_stats_ivm_tf)
+			m_lookup_stats.ivm_tf_pages_sum++;
+#endif
 		auto& list = m_src.m_map[page];
 		for (auto i = list.begin(); i != list.end();)
 		{
+#if GS_TC_LOOKUP_STATS
+			if (m_lookup_stats_ivm_tf)
+			{
+				m_lookup_stats.ivm_tf_src_sum++;
+				m_lookup_stats_tf_src_this++;
+			}
+#endif
 			Source* s = *i;
 			++i;
 
@@ -4846,6 +4972,14 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 		}
 	});
 
+#if GS_TC_LOOKUP_STATS
+	if (!target)
+	{
+		if (m_lookup_stats_tf_src_this == 0)
+			m_lookup_stats.ivm_tf_empty++;
+		return;
+	}
+#endif
 	if (!target)
 		return;
 
@@ -8185,11 +8319,24 @@ void GSTextureCache::Target::UpdateDrawn(const GSVector4i& rect, bool can_update
 
 void GSTextureCache::Target::ResizeValidity(const GSVector4i& rect)
 {
+#if GS_TC_LOOKUP_STATS
+	g_texture_cache->m_lookup_stats.eov++;
+	g_texture_cache->m_lookup_stats.eov_rv++;
+#endif
 	if (!m_valid.eq(GSVector4i::zero()))
 	{
 		m_valid = m_valid.rintersect(rect);
 		m_drawn_since_read = m_drawn_since_read.rintersect(rect);
+#if GS_TC_LOOKUP_STATS
+		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
+			g_texture_cache->m_lookup_stats.eov_same++;
+#endif
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
+#if GS_TC_LOOKUP_STATS
+		m_end_of_valid_known = true;
+		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
+		m_end_of_valid_rect = m_valid;
+#endif
 	}
 
 	// Else No valid size, so need to resize down.
@@ -8199,17 +8346,39 @@ void GSTextureCache::Target::ResizeValidity(const GSVector4i& rect)
 
 void GSTextureCache::Target::UpdateValidity(const GSVector4i& rect, bool can_resize)
 {
+#if GS_TC_LOOKUP_STATS
+	g_texture_cache->m_lookup_stats.eov++;
+	g_texture_cache->m_lookup_stats.eov_uv++;
+#endif
 	if (m_valid.eq(GSVector4i::zero()))
 	{
 		m_valid = rect;
 
+#if GS_TC_LOOKUP_STATS
+		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
+			g_texture_cache->m_lookup_stats.eov_same++;
+#endif
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
+#if GS_TC_LOOKUP_STATS
+		m_end_of_valid_known = true;
+		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
+		m_end_of_valid_rect = m_valid;
+#endif
 	}
 	else if (can_resize)
 	{
 		m_valid = m_valid.runion(rect);
 
+#if GS_TC_LOOKUP_STATS
+		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
+			g_texture_cache->m_lookup_stats.eov_same++;
+#endif
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
+#if GS_TC_LOOKUP_STATS
+		m_end_of_valid_known = true;
+		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
+		m_end_of_valid_rect = m_valid;
+#endif
 	}
 	// GL_CACHE("TC: UpdateValidity (0x%x->0x%x) from R:%d,%d Valid: %d,%d", m_TEX0.TBP0, m_end_block, rect.z, rect.w, m_valid.z, m_valid.w);
 }

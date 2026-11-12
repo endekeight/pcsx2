@@ -199,6 +199,9 @@ void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 	m_skip = 0;
 	m_skip_offset = 0;
 
+#if GS_TC_LOOKUP_STATS
+	g_texture_cache->PrintLookupStatsIfDue();
+#endif
 	GSRenderer::VSync(field, registers_written, idle_frame);
 }
 
@@ -3803,9 +3806,15 @@ void GSRendererHW::Draw()
 		ZBUF_TEX0.TBW = m_cached_ctx.FRAME.FBW;
 		ZBUF_TEX0.PSM = m_cached_ctx.ZBUF.PSM;
 
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_DRAW_DS;
+#endif
 		ds = g_texture_cache->LookupDrawTarget(ZBUF_TEX0, t_size, target_scale, GSTextureCache::DepthStencil,
 			m_cached_ctx.DepthWrite(), 0, force_preload, preserve_depth, preserve_depth, unclamped_draw_rect, IsPossibleChannelShuffle(), is_possible_mem_clear && ZBUF_TEX0.TBP0 != m_cached_ctx.FRAME.Block(), !no_rt,
 			src, nullptr, -1);
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_OTHER;
+#endif
 
 		ZBUF_TEX0.TBW = m_channel_shuffle ? src->m_from_target_TEX0.TBW : m_cached_ctx.FRAME.FBW;
 
@@ -4065,9 +4074,15 @@ void GSRendererHW::Draw()
 		// Of course if this size is different (in width) or this is a shuffle happening, this will be bypassed.
 		const bool preserve_downscale_draw = (GSConfig.UserHacks_NativeScaling != GSNativeScaling::Off && ((std::abs(scale_draw) == 1 && !scaled_copy) || (scale_draw == 0 && src && src->m_from_target && src->m_from_target->m_downscaled))) || is_possible_mem_clear == ClearType::ClearWithDraw;
 
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_DRAW_RT;
+#endif
 		rt = g_texture_cache->LookupDrawTarget(FRAME_TEX0, t_size, ((src && src->m_scale != 1) && (GSConfig.UserHacks_NativeScaling == GSNativeScaling::Normal || GSConfig.UserHacks_NativeScaling == GSNativeScaling::NormalUpscaled) && !possible_shuffle) ? GetTextureScaleFactor() : target_scale, GSTextureCache::RenderTarget, true,
 			fm, force_preload, preserve_rt_rgb, preserve_rt_alpha, lookup_rect, possible_shuffle, is_possible_mem_clear && FRAME_TEX0.TBP0 != m_cached_ctx.ZBUF.Block(),
 			GSConfig.UserHacks_NativeScaling != GSNativeScaling::Off && preserve_downscale_draw && is_possible_mem_clear != ClearType::NormalClear, src, ds, (no_ds || !ds) ? -1 : (m_cached_ctx.ZBUF.Block() - ds->m_TEX0.TBP0));
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_OTHER;
+#endif
 
 		// Draw skipped because it was a clear and there was no target.
 		if (!rt)
@@ -4448,9 +4463,15 @@ void GSRendererHW::Draw()
 		ZBUF_TEX0.TBW = m_cached_ctx.FRAME.FBW;
 		ZBUF_TEX0.PSM = m_cached_ctx.ZBUF.PSM;
 
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_DRAW_DS;
+#endif
 		ds = g_texture_cache->LookupDrawTarget(ZBUF_TEX0, t_size, target_scale, GSTextureCache::DepthStencil,
 			m_cached_ctx.DepthWrite(), 0, force_preload, preserve_depth, preserve_depth, unclamped_draw_rect, IsPossibleChannelShuffle(), is_possible_mem_clear && ZBUF_TEX0.TBP0 != m_cached_ctx.FRAME.Block(), false,
 			src, nullptr, -1);
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_OTHER;
+#endif
 
 		ZBUF_TEX0.TBW = m_channel_shuffle ? src->m_from_target_TEX0.TBW : m_cached_ctx.FRAME.FBW;
 
@@ -5369,7 +5390,13 @@ void GSRendererHW::Draw()
 		if (m_mem.m_clut.GetGPUTexture() && m_mem.m_clut.GetGPUTexture() == rt->m_texture)
 			m_mem.m_clut.SetGPUTextureDirty(rt->m_last_draw, rt->m_texture);
 
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_DRAW_IVM;
+#endif
 		g_texture_cache->InvalidateVideoMem(context->offset.fb, real_rect, false);
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_OTHER;
+#endif
 
 		// Remove overwritten Zs at the FBP.
 		g_texture_cache->InvalidateVideoMemType(GSTextureCache::DepthStencil, m_cached_ctx.FRAME.Block(),
@@ -5385,7 +5412,13 @@ void GSRendererHW::Draw()
 
 	if (zm != 0xffffffff && !no_ds)
 	{
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_DRAW_IVM;
+#endif
 		g_texture_cache->InvalidateVideoMem(context->offset.zb, real_rect, false);
+#if GS_TC_LOOKUP_STATS
+		g_texture_cache->m_lookup_stats_site = GSTextureCache::LOOKUP_STATS_SITE_OTHER;
+#endif
 
 		// Remove overwritten RTs at the ZBP.
 		g_texture_cache->InvalidateVideoMemType(
