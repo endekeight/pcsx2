@@ -1,4 +1,7 @@
-if(DISABLE_ADVANCE_SIMD OR LTO_PCSX2_CORE)
+# On Android the application links libpcsx2.a as a static archive, so PCSX2 stays a static
+# library under LTO_PCSX2_CORE; the LTO subset PCSX2_LTO is its own archive, which
+# tools/make_android.sh installs beside it.
+if(DISABLE_ADVANCE_SIMD)
 	# Fixes issues with some compiler + linker combinations
 	add_library(PCSX2 OBJECT)
 else()
