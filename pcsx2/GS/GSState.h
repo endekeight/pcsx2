@@ -84,6 +84,9 @@ private:
 	GIFPackedRegHandlerC m_fpGIFPackedRegHandlerSTQRGBAXYZ2[8] = {};
 
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+#if GS_KICK_CHUNKED
+	void KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+#endif
 #if GS_KICK_VERIFY
 	template <u32 prim, bool auto_flush>
 	void KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size);
@@ -233,6 +236,14 @@ protected:
 		u64 mismatch_runs = 0;
 		u64 mm_fields = 0, mm_prev_env = 0, mm_vtx = 0, mm_idx = 0, mm_flush_count = 0, mm_flush_reason = 0, mm_packet = 0;
 		u64 details = 0;
+		u64 chunk_calls = 0;
+		u64 chunk_verts = 0;
+		u64 chunk_unconverted = 0;
+		u64 chunk_bail_verts = 0;
+		u64 chunk_bail_small = 0;
+		u64 chunk_bail_drawbuf = 0;
+		u64 chunk_bail_remainder = 0;
+		u64 chunk_bail_room = 0;
 		std::chrono::steady_clock::time_point last{};
 	};
 
