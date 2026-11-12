@@ -165,6 +165,7 @@ clang++ -std=c++20 $ARCH_FLAGS \
   "$DIR/tests/ctest/core/patch_tests.cpp" \
   "$DIR/tests/ctest/core/vtlb_unmapped_phy_tests.cpp" \
   "$DIR/tests/ctest/core/GS/texture_block_index_tests.cpp" \
+  "$DIR/tests/ctest/core/GS/kick_chunked_tests.cpp" \
   "$DIR/tests/ctest/core/GS/sw_texture_buffer_tests.cpp" \
   "$DIR/tests/ctest/core/GS/tc_fast_lookup_tests.cpp" \
   "$DIR/tests/ctest/core/GS/tc_block_id_tests.cpp" \

@@ -6,6 +6,7 @@ add_pcsx2_test(core_test
 	GS/tc_fast_lookup_tests.cpp
 	GS/tc_block_id_tests.cpp
 	GS/gif_fused_layout_tests.cpp
+	GS/kick_chunked_tests.cpp
 	MockMemoryInterface.h
 	StubHost.cpp
 )
