@@ -1586,3 +1586,220 @@ TEST(GSKickChunkedTests, TrailingSkippedRunAcrossChunkSeamToPacketEnd)
 		EXPECT_EQ(actual.tail, total_count);
 	}
 }
+
+namespace
+{
+
+static GSDrawingContext MakeSelfReadContext()
+{
+	GSDrawingContext ctx = {};
+	ctx.FRAME.FBP = 4; // Block() == 128
+	ctx.FRAME.FBW = 10;
+	ctx.FRAME.PSM = PSMCT32;
+	ctx.FRAME.FBMSK = 0;
+
+	ctx.ZBUF.ZBP = 10; // Block() == 320
+	ctx.ZBUF.PSM = PSMZ32;
+	ctx.ZBUF.ZMSK = 0;
+
+	ctx.TEX0.TBP0 = ctx.FRAME.Block();
+	ctx.TEX0.TBW = 10;
+	ctx.TEX0.PSM = PSMCT32;
+	ctx.TEX0.TW = 8;
+	ctx.TEX0.TH = 8;
+
+	ctx.TEX1.MXL = 0;
+	ctx.TEX1.MMIN = 1;
+	ctx.TEX1.LCM = 0;
+	ctx.TEX1.K = 0;
+
+	ctx.TEST.ATE = 0;
+	ctx.TEST.ATST = ATST_ALWAYS;
+	ctx.TEST.AFAIL = AFAIL_KEEP;
+	ctx.TEST.ZTE = 1;
+	ctx.TEST.ZTST = ZTST_GEQUAL;
+
+	return ctx;
+}
+
+static GIFRegPRIM MakeTexturedTriangleStripPrim()
+{
+	GIFRegPRIM prim = {};
+	prim.PRIM = GS_TRIANGLESTRIP;
+	prim.TME = 1;
+	return prim;
+}
+
+} // namespace
+
+TEST(GSKickChunkedTests, AutoFlushPredicateTextureMappingOrLevelGuard)
+{
+	const GSDrawingContext ctx = MakeSelfReadContext();
+	GIFRegPRIM prim = MakeTexturedTriangleStripPrim();
+
+	// Active self-read draw with Enabled auto-flush must bail to per-vertex path.
+	EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// SpritesOnly disables auto-flush for non-sprite primitives such as GS_TRIANGLESTRIP.
+	EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::SpritesOnly));
+
+	// Untextured draws (TME == 0) never auto-flush.
+	prim.TME = 0;
+	EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+}
+
+TEST(GSKickChunkedTests, AutoFlushPredicateChannelMaskAndFormatSharing)
+{
+	const GIFRegPRIM prim = MakeTexturedTriangleStripPrim();
+
+	// Disjoint channel masks: 24-bit frame (RGB = 0x7) vs 8H/4HL/4HH texture (A = 0x8).
+	for (u32 tex_psm : {static_cast<u32>(PSMT8H), static_cast<u32>(PSMT4HL), static_cast<u32>(PSMT4HH)})
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.FRAME.PSM = PSMCT24;
+		ctx.TEX0.PSM = tex_psm;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// Frame mask disabling all RGB channels while texture reads 24-bit RGB.
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.FRAME.PSM = PSMCT32;
+		ctx.FRAME.FBMSK = 0x00FFFFFFu;
+		ctx.TEX0.PSM = PSMCT24;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// Partial byte mask (not all 8 bits of a channel masked) still shares the channel.
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.FRAME.PSM = PSMCT32;
+		ctx.FRAME.FBMSK = 0x00FFFFFEu;
+		ctx.TEX0.PSM = PSMCT24;
+		EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// ZBUF hit with disjoint bits in 32-bit word (PSMZ24 vs PSMT8H at same block, while FRAME is elsewhere).
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.FRAME.FBP = 20;
+		ctx.FRAME.PSM = PSMCT32;
+		ctx.ZBUF.ZBP = 4;
+		ctx.ZBUF.PSM = PSMZ24;
+		ctx.TEX0.TBP0 = ctx.ZBUF.Block();
+		ctx.TEX0.PSM = PSMT8H;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+		ctx.TEX0.PSM = PSMCT32;
+		EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+}
+
+TEST(GSKickChunkedTests, AutoFlushPredicateFrameAndZbufWriteMasking)
+{
+	const GIFRegPRIM prim = MakeTexturedTriangleStripPrim();
+
+	// Disjoint base blocks: safe to chunk.
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.TEX0.TBP0 = 64;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// Frame address hit suppressed when alpha test is NEVER (ATST == 0) with AFAIL == ZB_ONLY (2).
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.TEST.ATE = 1;
+		ctx.TEST.ATST = ATST_NEVER;
+		ctx.TEST.AFAIL = AFAIL_ZB_ONLY;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// Frame address hit suppressed when FBMSK masks all active bits of FRAME.PSM (e.g. PSMCT16 fmsk = 0x80F8F8F8).
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.FRAME.PSM = PSMCT16;
+		ctx.FRAME.FBMSK = 0x80F8F8F8u;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+
+	// ZBUF address hit suppressed when ZMSK == 1 or when ATE && ATST == NEVER && AFAIL != ZB_ONLY.
+	{
+		GSDrawingContext ctx = MakeSelfReadContext();
+		ctx.TEX0.TBP0 = ctx.ZBUF.Block();
+		EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+		ctx.ZBUF.ZMSK = 1;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+		ctx.ZBUF.ZMSK = 0;
+		ctx.TEST.ATE = 1;
+		ctx.TEST.ATST = ATST_NEVER;
+		ctx.TEST.AFAIL = AFAIL_FB_ONLY;
+		EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
+	}
+}
+
+TEST(GSKickChunkedTests, AutoFlushPredicateMipmapLayers)
+{
+	const GIFRegPRIM prim = MakeTexturedTriangleStripPrim();
+	GSDrawingContext ctx = MakeSelfReadContext();
+	ctx.TEX0.TBP0 = 64; // Level 0 does not match FRAME (128) or ZBUF (320).
+	ctx.MIPTBP1.TBP1 = 64;
+	ctx.MIPTBP1.TBP2 = 64;
+	ctx.MIPTBP1.TBP3 = 64;
+	ctx.MIPTBP2.TBP4 = ctx.FRAME.Block(); // Level 4 matches FRAME.
+	ctx.MIPTBP2.TBP5 = 64;
+	ctx.MIPTBP2.TBP6 = ctx.ZBUF.Block(); // Level 6 matches ZBUF.
+
+	// Mipmapping inactive because MMIN == 1 (linear without mipmaps): only layer 0 checked.
+	ctx.TEX1.MXL = 6;
+	ctx.TEX1.MMIN = 1;
+	ctx.TEX1.LCM = 0;
+	EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// Variable LOD (LCM == 0) with MMIN == 2 and MXL == 3 checks layers 0..3 (no hit).
+	ctx.TEX1.MMIN = 2;
+	ctx.TEX1.MXL = 3;
+	EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// Variable LOD with MXL == 4 reaches layer 4 (hits FRAME).
+	ctx.TEX1.MXL = 4;
+	EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// Fixed LOD (LCM == 1) with K selecting only layers 1..2 (K = 24 -> 24>>4 = 1, 39>>4 = 2) avoids layer 4.
+	ctx.TEX1.LCM = 1;
+	ctx.TEX1.MXL = 6;
+	ctx.TEX1.K = 24;
+	EXPECT_TRUE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// Fixed LOD with K selecting layer 6 (K = 96 -> 96>>4 = 6) hits ZBUF at layer 6.
+	ctx.TEX1.K = 96;
+	EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+
+	// Out-of-range MXL == 7 with active mipmaps conservatively bails to the per-vertex path.
+	ctx.TEX1.LCM = 0;
+	ctx.TEX1.MXL = 7;
+	EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
+		prim, ctx, GSHWAutoFlushLevel::Enabled));
+}
+
