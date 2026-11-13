@@ -2509,6 +2509,114 @@ GSTextureCache::Target* GSTextureCache::FrontDrawTarget(GIFRegTEX0 TEX0, float s
 		return nullptr;
 	return t;
 }
+
+bool GSTextureCache::SourceMap::AnyPageUsed(const u64* bits, u32 start, u32 count)
+{
+	if (count == 0)
+		return false;
+	if (count >= GS_MAX_PAGES)
+	{
+		for (u32 w = 0; w < GS_MAX_PAGES / 64; w++)
+		{
+			if (bits[w])
+				return true;
+		}
+		return false;
+	}
+
+	auto range_used = [bits](u32 first, u32 last) -> bool {
+		if (first >= last)
+			return false;
+		const u32 first_w = first / 64;
+		const u32 last_w = (last - 1) / 64;
+		const u32 first_b = first % 64;
+		if (first_w == last_w)
+		{
+			const u32 width = last - first;
+			const u64 mask = (width == 64) ? ~u64{0} : (((u64{1} << width) - 1) << first_b);
+			return (bits[first_w] & mask) != 0;
+		}
+		if ((bits[first_w] >> first_b) != 0)
+			return true;
+		for (u32 w = first_w + 1; w < last_w; w++)
+		{
+			if (bits[w])
+				return true;
+		}
+		const u32 last_b = last % 64;
+		const u64 last_mask = (last_b == 0) ? ~u64{0} : ((u64{1} << last_b) - 1);
+		return (bits[last_w] & last_mask) != 0;
+	};
+
+	start %= GS_MAX_PAGES;
+	const u32 end = start + count;
+	if (end <= GS_MAX_PAGES)
+		return range_used(start, end);
+	return range_used(start, GS_MAX_PAGES) || range_used(0, end - GS_MAX_PAGES);
+}
+
+static bool FastLookupLoopPagesSpan(const GSOffset& off, const GSVector4i& rect, u32& first, u32& count)
+{
+	if (rect.left < 0 || rect.top < 0 || rect.right < rect.left || rect.bottom < rect.top)
+		return false;
+
+	const GSVector2i page_size = GSLocalMemory::m_psm[off.psm()].pgs;
+	const int page_w = page_size.x;
+	const int page_h = page_size.y;
+	if (page_w <= 0 || page_h <= 0 || (page_w & (page_w - 1)) != 0 || (page_h & (page_h - 1)) != 0)
+		return false;
+
+	const int topPg = rect.top / page_h;
+	const int botPg = (rect.bottom + page_h - 1) / page_h;
+	const int yCnt = botPg - topPg;
+	const int bwPg = static_cast<int>((off.bw() * 64u) / static_cast<u32>(page_w));
+	if (yCnt <= 0 || bwPg < 0)
+		return false;
+
+	const bool aligned = (off.bp() & 0x1f) == 0;
+	const int xStart = rect.left / page_w;
+	const int xEnd = ((rect.right + page_w - 1) / page_w) + (aligned ? 0 : 1);
+	if (xEnd <= xStart)
+		return false;
+
+	const int looper_bp = static_cast<int>(off.bp() >> 5) + topPg * bwPg;
+	const int first_pos = looper_bp + xStart;
+	const int last_pos = looper_bp + (yCnt - 1) * bwPg + xEnd;
+	if (first_pos < 0 || last_pos <= first_pos)
+		return false;
+
+	first = static_cast<u32>(first_pos);
+	count = static_cast<u32>(last_pos - first_pos);
+	return true;
+}
+
+bool GSTextureCache::NoSourceUnderWrite(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp)
+{
+	const u32 bp = off.bp();
+	const u32 bw = off.bw();
+	const int pages = (end_bp + ((1 << 5) - 1) - start_bp) >> 5;
+	if (pages > 0)
+	{
+		if (m_src.AnyPageUsed(bp >> 5, static_cast<u32>(pages)))
+			return false;
+	}
+
+	const u32 bbp = bp + bw * 0x10;
+	if (bw >= 16 && bbp < 16384)
+	{
+		if (m_src.AnyPageUsed(bbp >> 5, 1))
+			return false;
+	}
+
+	u32 loop_first = 0;
+	u32 loop_count = 0;
+	if (!FastLookupLoopPagesSpan(off, rect, loop_first, loop_count))
+		return false;
+	if (m_src.AnyPageUsed(loop_first, loop_count))
+		return false;
+
+	return true;
+}
 #endif
 
 #if GS_TC_FAST_LOOKUP_VERIFY
@@ -2524,15 +2632,71 @@ void GSTextureCache::PrintFastLookupVerifyIfDue()
 		return;
 
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_fl_last).count();
-	Console.WriteLn("GSTCVERIFY: ms=%lld fl_hits=%llu fl_misses=%llu fl_verified=%llu",
+	Console.WriteLn("GSTCVERIFY: ms=%lld fl_hits=%llu fl_misses=%llu fl_verified=%llu ns_calls=%llu ns_early=%llu ns_verified=%llu ns_stale_occupied=%llu",
 		static_cast<long long>(ms),
 		static_cast<unsigned long long>(m_fl_hits),
 		static_cast<unsigned long long>(m_fl_misses),
-		static_cast<unsigned long long>(m_fl_verified));
+		static_cast<unsigned long long>(m_fl_verified),
+		static_cast<unsigned long long>(m_ns_calls),
+		static_cast<unsigned long long>(m_ns_early),
+		static_cast<unsigned long long>(m_ns_verified),
+		static_cast<unsigned long long>(m_ns_stale_occupied));
 	m_fl_hits = 0;
 	m_fl_misses = 0;
 	m_fl_verified = 0;
+	m_ns_calls = 0;
+	m_ns_early = 0;
+	m_ns_verified = 0;
+	m_ns_stale_occupied = 0;
 	m_fl_last = now;
+}
+
+void GSTextureCache::VerifyNoSourceOccupancy(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp)
+{
+	u64 seen[GS_MAX_PAGES / 64] = {};
+	auto check = [this, &seen](u32 page) {
+		page %= GS_MAX_PAGES;
+		const u32 w = page / 64;
+		const u64 mask = u64{1} << (page % 64);
+		if (seen[w] & mask)
+			return;
+		seen[w] |= mask;
+		const bool bit = (m_src.m_page_used[w] & mask) != 0;
+		const bool list = !m_src.m_map[page].empty();
+		if (bit && !list)
+			m_ns_stale_occupied++;
+		if (!bit && list)
+		{
+			Console.WriteLn("GSTCVERIFY: occupancy empty for page %u with a source list", page);
+			pxFailRel("GSTCVERIFY mismatch");
+			std::abort();
+		}
+	};
+
+	const u32 bp = off.bp();
+	const u32 bw = off.bw();
+	const int pages = (end_bp + ((1 << 5) - 1) - start_bp) >> 5;
+	if (pages > 0)
+	{
+		const u32 n = (static_cast<u32>(pages) >= GS_MAX_PAGES) ? GS_MAX_PAGES : static_cast<u32>(pages);
+		const u32 s = (bp >> 5) % GS_MAX_PAGES;
+		for (u32 i = 0; i < n; i++)
+			check((s + i) % GS_MAX_PAGES);
+	}
+
+	const u32 bbp = bp + bw * 0x10;
+	if (bw >= 16 && bbp < 16384)
+		check(bbp >> 5);
+
+	u32 loop_first = 0;
+	u32 loop_count = 0;
+	if (FastLookupLoopPagesSpan(off, rect, loop_first, loop_count) && loop_count > 0)
+	{
+		const u32 n = (loop_count >= GS_MAX_PAGES) ? GS_MAX_PAGES : loop_count;
+		const u32 s = loop_first % GS_MAX_PAGES;
+		for (u32 i = 0; i < n; i++)
+			check((s + i) % GS_MAX_PAGES);
+	}
 }
 #endif
 
@@ -5158,6 +5322,10 @@ void GSTextureCache::InvalidateVideoMemType(int type, u32 bp, u32 write_psm, u32
 // Called each time you want to write to the GS memory
 void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& rect, bool target)
 {
+#if GS_TC_FAST_LOOKUP_VERIFY
+	m_ns_would_early = false;
+	m_ns_visited = 0;
+#endif
 #if GS_TC_LOOKUP_STATS
 	m_lookup_stats.ivm++;
 	m_lookup_stats_ivm_tf = !target;
@@ -5185,6 +5353,30 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 	const u32 start_bp = GSLocalMemory::GetStartBlockAddress(off.bp(), off.bw(), off.psm(), rect);
 	const u32 end_bp = rect.rempty() ? start_bp : GSLocalMemory::GetUnwrappedEndBlockAddress(off.bp(), off.bw(), off.psm(), rect);
 
+#if GS_TC_FAST_LOOKUP
+	if (!target)
+	{
+#if GS_TC_FAST_LOOKUP_VERIFY
+		m_ns_calls++;
+		m_ns_visited = 0;
+		m_ns_would_early = NoSourceUnderWrite(off, rect, start_bp, end_bp);
+		if (m_ns_would_early)
+			m_ns_early++;
+		VerifyNoSourceOccupancy(off, rect, start_bp, end_bp);
+		PrintFastLookupVerifyIfDue();
+#else
+		if (NoSourceUnderWrite(off, rect, start_bp, end_bp))
+		{
+			// needs proper testing
+#if GS_TC_LOOKUP_STATS
+			m_lookup_stats.ivm_tf_empty++;
+#endif
+			return;
+		}
+#endif
+	}
+#endif
+
 	if (!target)
 	{
 		const int pages = (end_bp + ((1<<5)-1) - start_bp) >> 5;
@@ -5201,6 +5393,9 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 #if GS_TC_LOOKUP_STATS
 				m_lookup_stats.ivm_tf_src_sum++;
 				m_lookup_stats_tf_src_this++;
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+				m_ns_visited++;
 #endif
 				Source* s = *i;
 				++i;
@@ -5227,6 +5422,9 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 #if GS_TC_LOOKUP_STATS
 					m_lookup_stats.ivm_tf_src_sum++;
 					m_lookup_stats_tf_src_this++;
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+					m_ns_visited++;
 #endif
 					Source* s = *i;
 					++i;
@@ -5259,6 +5457,10 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 				m_lookup_stats.ivm_tf_src_sum++;
 				m_lookup_stats_tf_src_this++;
 			}
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+			if (m_ns_would_early)
+				m_ns_visited++;
 #endif
 			Source* s = *i;
 			++i;
@@ -5317,6 +5519,19 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 			}
 		}
 	});
+
+#if GS_TC_FAST_LOOKUP_VERIFY
+	if (!target && m_ns_would_early)
+	{
+		if (m_ns_visited != 0)
+		{
+			Console.WriteLn("GSTCVERIFY: NoSourceUnderWrite visited %u source nodes", m_ns_visited);
+			pxFailRel("GSTCVERIFY mismatch");
+			std::abort();
+		}
+		m_ns_verified++;
+	}
+#endif
 
 #if GS_TC_LOOKUP_STATS
 	if (!target)
@@ -8827,6 +9042,11 @@ void GSTextureCache::SourceMap::Add(Source* s, const GIFRegTEX0& TEX0)
 	// The source pointer will be stored/duplicated in all m_map[array of pages]
 	s->m_pages.loopPages([this, s](u32 page) {
 		s->m_erase_it[page] = m_map[page].InsertFront(s);
+#if GS_TC_FAST_LOOKUP
+#if !GS_TC_FAST_LOOKUP_MUTATE
+		m_page_used[page / 64] |= u64{1} << (page % 64);
+#endif
+#endif
 	});
 }
 
@@ -8859,6 +9079,9 @@ void GSTextureCache::SourceMap::RemoveAll()
 	{
 		item.clear();
 	}
+#if GS_TC_FAST_LOOKUP
+	m_page_used.fill(0);
+#endif
 }
 
 void GSTextureCache::SourceMap::RemoveAt(Source* s)
@@ -8870,6 +9093,10 @@ void GSTextureCache::SourceMap::RemoveAt(Source* s)
 
 	s->m_pages.loopPages([this, s](u32 page) {
 		m_map[page].EraseIndex(s->m_erase_it[page]);
+#if GS_TC_FAST_LOOKUP
+		if (m_map[page].empty())
+			m_page_used[page / 64] &= ~(u64{1} << (page % 64));
+#endif
 	});
 
 	if (s->m_from_hash_cache)

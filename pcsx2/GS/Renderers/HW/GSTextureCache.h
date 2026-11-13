@@ -23,10 +23,11 @@ class GSHwHack;
 #endif
 
 // Skip the draw-target walk when the list head is already the answer.
+// Also skip InvalidateVideoMem source walks when no source occupies the written pages.
 #ifndef GS_TC_FAST_LOOKUP
 #define GS_TC_FAST_LOOKUP 0
 #endif
-// Oracle that the front-target shortcut matches the full walk.
+// Oracle that the front-target and no-source-under-write shortcuts match the full walks.
 #ifndef GS_TC_FAST_LOOKUP_VERIFY
 #define GS_TC_FAST_LOOKUP_VERIFY 0
 #endif
@@ -410,6 +411,14 @@ public:
 	public:
 		std::unordered_set<Source*> m_surfaces;
 		std::array<FastList<Source*>, GS_MAX_PAGES> m_map;
+#if GS_TC_FAST_LOOKUP
+		std::array<u64, GS_MAX_PAGES / 64> m_page_used{};
+		static bool AnyPageUsed(const u64* bits, u32 start, u32 count);
+		bool AnyPageUsed(u32 start, u32 count) const
+		{
+			return AnyPageUsed(m_page_used.data(), start, count);
+		}
+#endif
 
 		void Add(Source* s, const GIFRegTEX0& TEX0);
 		void SwapTexture(GSTexture* old_tex, GSTexture* new_tex);
@@ -576,6 +585,7 @@ private:
 #if GS_TC_FAST_LOOKUP
 	Target* FrontDrawTarget(GIFRegTEX0 TEX0, float scale, int type, bool preserve_rgb, bool preserve_alpha,
 		const GSVector4i& draw_rect);
+	bool NoSourceUnderWrite(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
 #endif
 
 public:
@@ -706,9 +716,16 @@ public:
 	u64 m_fl_hits = 0;
 	u64 m_fl_misses = 0;
 	u64 m_fl_verified = 0;
+	u64 m_ns_calls = 0;
+	u64 m_ns_early = 0;
+	u64 m_ns_verified = 0;
+	u64 m_ns_stale_occupied = 0;
+	u32 m_ns_visited = 0;
+	bool m_ns_would_early = false;
 	std::chrono::steady_clock::time_point m_fl_last{};
 
 	void PrintFastLookupVerifyIfDue();
+	void VerifyNoSourceOccupancy(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
 #endif
 };
 
