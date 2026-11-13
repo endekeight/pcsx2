@@ -276,7 +276,6 @@ protected:
 		u64 verify_ok = 0;
 		u64 verify_f = 0;
 		u64 verify_f_ok = 0;
-		u64 skip_flush = 0;
 		u64 skip_write = 0;
 		u64 skip_grow = 0;
 		u64 skip_move = 0;
@@ -347,18 +346,15 @@ protected:
 	u32 m_fused_trial_kicks = 0;
 	bool m_fused_flush_captured = false;
 	bool m_fused_trial_inval = false;
+	const u8** m_fused_verify_mem = nullptr;
+	u32 m_fused_verify_total = 0;
 	u64 m_fused_l1_addr[128]{};
 
 	void FusedVerifyCapture(FusedVerifySnap& s);
-	void FusedVerifyRestore(const FusedVerifySnap& s);
+	bool FusedVerifyRestore(const FusedVerifySnap& s);
 	bool FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap& b, const char* layout, u64 packet);
 	void FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values);
 	void MaybePrintFusedStats();
-	void FusedVerifyNoteFlush()
-	{
-		if (m_fused_verify_guard)
-			m_fused_verify_skip |= 1u;
-	}
 	void FusedVerifyNoteWrite()
 	{
 		if (m_fused_verify_guard)
@@ -386,7 +382,6 @@ protected:
 	GIFPackedRegHandlerFusedL2 m_fused_run_l2 = nullptr;
 	GIFPackedRegHandlerFusedL3 m_fused_run_l3 = nullptr;
 	u32 m_fused_run_pairs = 0;
-	int m_fused_run_layout = 0;
 #endif
 #endif
 

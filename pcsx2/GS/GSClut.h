@@ -7,7 +7,6 @@
 #include "GSVector.h"
 #include "GSTables.h"
 #include "GSAlignedClass.h"
-#include "GSGifFused.h"
 
 class GSLocalMemory;
 class GSTexture;

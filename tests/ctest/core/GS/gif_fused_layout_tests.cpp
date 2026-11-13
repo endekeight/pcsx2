@@ -38,6 +38,12 @@ TEST(GifFusedLayout, L2x3AcceptsOwnOnly)
 	EXPECT_FALSE(MatchPackedLayoutL3(7, 0x02040201, 0x00040204, 0));
 }
 
+TEST(GifFusedLayout, L2x3MatchingR0R1NonzeroR2MatchesNone)
+{
+	EXPECT_FALSE(MatchPackedLayoutL2x3(7, 0x02040201, 0x00040204, 1));
+	EXPECT_FALSE(AnyMatch(7, 0x02040201, 0x00040204, 1));
+}
+
 TEST(GifFusedLayout, L3AcceptsOwnOnly)
 {
 	EXPECT_TRUE(MatchPackedLayoutL3(12, 0x02050102, 0x01020501, 0x05010205));
@@ -96,6 +102,7 @@ TEST(GifFusedLayout, L1AddrAllowed)
 	EXPECT_TRUE(FusedL1AddrAllowed(0x50));
 	EXPECT_TRUE(FusedL1AddrAllowed(0x51));
 	EXPECT_TRUE(FusedL1AddrAllowed(0x52));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x60));
 }
 
 TEST(GifFusedLayout, L1AddrSkipState)

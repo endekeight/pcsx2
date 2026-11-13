@@ -3683,6 +3683,7 @@ void GSState::MaybePrintGifLayoutStats()
 #endif
 
 #if GS_GIF_FUSED_VERIFY
+#include <cstdlib>
 void GSState::FusedVerifyCapture(FusedVerifySnap& s)
 {
 	s.kicks = 0;
@@ -3751,8 +3752,9 @@ void GSState::FusedVerifyCapture(FusedVerifySnap& s)
 	s.trial_inval = m_fused_trial_inval;
 }
 
-void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
+bool GSState::FusedVerifyRestore(const FusedVerifySnap& s)
 {
+	bool ok = true;
 	m_v = s.v;
 	m_q = s.q;
 	m_dirty_gs_regs = s.dirty_gs_regs;
@@ -3802,11 +3804,21 @@ void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
 		vb.xy[2] = s.v_xy[i][2];
 		vb.xy[3] = s.v_xy[i][3];
 		vb.xyhead = s.v_xyhead[i];
-		if (vb.buff && !s.vbuff[i].empty())
-			memcpy(vb.buff, s.vbuff[i].data(), s.vbuff[i].size() * sizeof(GSVertex));
+		if (!s.vbuff[i].empty())
+		{
+			if (!vb.buff || s.vbuff[i].size() > static_cast<size_t>(m_max_vertex_count) + 3)
+				ok = false;
+			else
+				memcpy(vb.buff, s.vbuff[i].data(), s.vbuff[i].size() * sizeof(GSVertex));
+		}
 		m_index_buffers[i].tail = s.i_tail[i];
-		if (m_index_buffers[i].buff && !s.ibuff[i].empty())
-			memcpy(m_index_buffers[i].buff, s.ibuff[i].data(), s.ibuff[i].size() * sizeof(u16));
+		if (!s.ibuff[i].empty())
+		{
+			if (!m_index_buffers[i].buff || s.ibuff[i].size() > (static_cast<size_t>(m_max_vertex_count) + 3) * 6)
+				ok = false;
+			else
+				memcpy(m_index_buffers[i].buff, s.ibuff[i].data(), s.ibuff[i].size() * sizeof(u16));
+		}
 	}
 	m_vertex = &m_vertex_buffers[m_current_buffer_idx];
 	m_index = &m_index_buffers[m_current_buffer_idx];
@@ -3815,15 +3827,20 @@ void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
 	m_context = const_cast<GSDrawingContext*>(&m_draw_env->CTXT[PRIM->CTXT]);
 	m_mem.m_clut.VerifyRestore(s.clut);
 	m_channel_shuffle_finish = s.channel_shuffle_finish;
+	return ok;
 }
 
 void GSState::FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values)
 {
+	(void)FusedVerifyRestore(m_fused_snap);
+	if (m_fused_verify_mem)
+		*m_fused_verify_mem += m_fused_verify_total * sizeof(GIFPackedReg);
 	if (values && values[0] != '\0')
 		Console.WriteLn("GSFUSED: mismatch layout=%s field=%s packet=%llu %s", layout, field, static_cast<unsigned long long>(packet), values);
 	else
 		Console.WriteLn("GSFUSED: mismatch layout=%s field=%s packet=%llu", layout, field, static_cast<unsigned long long>(packet));
 	pxFailRel("GSFUSED mismatch");
+	std::abort();
 }
 
 bool GSState::FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap& b, const char* layout, u64 packet)
@@ -3954,15 +3971,98 @@ bool GSState::FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap
 			return false;
 		}
 	}
-	if (memcmp(&a.env.PRIM, &b.env.PRIM, sizeof(a.env.PRIM)) != 0)
+	if (a.env.PRIM.U64 != b.env.PRIM.U64)
 	{
 		FusedVerifyFail(layout, "m_env.PRIM", packet, "");
+		return false;
+	}
+	if (a.env.PRMODE.U64 != b.env.PRMODE.U64)
+	{
+		FusedVerifyFail(layout, "m_env.PRMODE", packet, "");
+		return false;
+	}
+	if (a.env.PRMODECONT.U64 != b.env.PRMODECONT.U64)
+	{
+		FusedVerifyFail(layout, "m_env.PRMODECONT", packet, "");
+		return false;
+	}
+	if (a.env.TEXCLUT.U64 != b.env.TEXCLUT.U64)
+	{
+		FusedVerifyFail(layout, "m_env.TEXCLUT", packet, "");
+		return false;
+	}
+	if (a.env.SCANMSK.U64 != b.env.SCANMSK.U64)
+	{
+		FusedVerifyFail(layout, "m_env.SCANMSK", packet, "");
+		return false;
+	}
+	if (a.env.TEXA.U64 != b.env.TEXA.U64)
+	{
+		FusedVerifyFail(layout, "m_env.TEXA", packet, "");
+		return false;
+	}
+	if (a.env.FOGCOL.U64 != b.env.FOGCOL.U64)
+	{
+		FusedVerifyFail(layout, "m_env.FOGCOL", packet, "");
+		return false;
+	}
+	if (a.env.DIMX.U64 != b.env.DIMX.U64)
+	{
+		FusedVerifyFail(layout, "m_env.DIMX", packet, "");
+		return false;
+	}
+	if (a.env.DTHE.U64 != b.env.DTHE.U64)
+	{
+		FusedVerifyFail(layout, "m_env.DTHE", packet, "");
+		return false;
+	}
+	if (a.env.COLCLAMP.U64 != b.env.COLCLAMP.U64)
+	{
+		FusedVerifyFail(layout, "m_env.COLCLAMP", packet, "");
+		return false;
+	}
+	if (a.env.PABE.U64 != b.env.PABE.U64)
+	{
+		FusedVerifyFail(layout, "m_env.PABE", packet, "");
+		return false;
+	}
+	if (a.env.BITBLTBUF.U64 != b.env.BITBLTBUF.U64)
+	{
+		FusedVerifyFail(layout, "m_env.BITBLTBUF", packet, "");
+		return false;
+	}
+	if (a.env.TRXDIR.U64 != b.env.TRXDIR.U64)
+	{
+		FusedVerifyFail(layout, "m_env.TRXDIR", packet, "");
+		return false;
+	}
+	if (a.env.TRXPOS.U64 != b.env.TRXPOS.U64)
+	{
+		FusedVerifyFail(layout, "m_env.TRXPOS", packet, "");
+		return false;
+	}
+	if (a.env.TRXREG.U64 != b.env.TRXREG.U64)
+	{
+		FusedVerifyFail(layout, "m_env.TRXREG", packet, "");
 		return false;
 	}
 	if (memcmp(&a.env.CTXT[0], &b.env.CTXT[0], 96) != 0 || memcmp(&a.env.CTXT[1], &b.env.CTXT[1], 96) != 0)
 	{
 		FusedVerifyFail(layout, "m_env.CTXT", packet, "");
 		return false;
+	}
+	for (int ctx = 0; ctx < 2; ctx++)
+	{
+		if (memcmp(&a.env.CTXT[ctx].offset, &b.env.CTXT[ctx].offset, sizeof(a.env.CTXT[ctx].offset)) != 0)
+		{
+			FusedVerifyFail(layout, "m_env.offset", packet, "");
+			return false;
+		}
+		if (memcmp(&a.env.CTXT[ctx].scissor, &b.env.CTXT[ctx].scissor, sizeof(a.env.CTXT[ctx].scissor)) != 0)
+		{
+			FusedVerifyFail(layout, "m_env.scissor", packet, "");
+			return false;
+		}
 	}
 	if (a.texflush_flag != b.texflush_flag)
 	{
@@ -4048,7 +4148,7 @@ void GSState::MaybePrintFusedStats()
 		const FusedLayoutCounters& c = m_fused_counters[i];
 		if (i == 0)
 		{
-			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu l1_break_prim=%llu l1_refused_ad=%llu",
+			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu l1_break_prim=%llu l1_refused_ad=%llu",
 				names[i],
 				static_cast<unsigned long long>(c.seen),
 				static_cast<unsigned long long>(c.accepted),
@@ -4057,7 +4157,6 @@ void GSState::MaybePrintFusedStats()
 				static_cast<unsigned long long>(c.verify_ok),
 				static_cast<unsigned long long>(c.verify_f),
 				static_cast<unsigned long long>(c.verify_f_ok),
-				static_cast<unsigned long long>(c.skip_flush),
 				static_cast<unsigned long long>(c.skip_write),
 				static_cast<unsigned long long>(c.skip_grow),
 				static_cast<unsigned long long>(c.skip_move),
@@ -4068,7 +4167,7 @@ void GSState::MaybePrintFusedStats()
 		}
 		else
 		{
-			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu",
+			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu",
 				names[i],
 				static_cast<unsigned long long>(c.seen),
 				static_cast<unsigned long long>(c.accepted),
@@ -4077,7 +4176,6 @@ void GSState::MaybePrintFusedStats()
 				static_cast<unsigned long long>(c.verify_ok),
 				static_cast<unsigned long long>(c.verify_f),
 				static_cast<unsigned long long>(c.verify_f_ok),
-				static_cast<unsigned long long>(c.skip_flush),
 				static_cast<unsigned long long>(c.skip_write),
 				static_cast<unsigned long long>(c.skip_grow),
 				static_cast<unsigned long long>(c.skip_move),
@@ -4130,8 +4228,6 @@ bool GSState::FusedVerifyTakeSkip(FusedLayoutCounters& c)
 		c.skip_grow++;
 	else if (m_fused_verify_skip & 8u)
 		c.skip_move++;
-	else
-		c.skip_flush++;
 	return true;
 }
 
@@ -4165,6 +4261,8 @@ void GSState::FusedVerifyMutate(FusedVerifySnap& s, int layout)
 void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int layout, const char* name)
 {
 	FusedLayoutCounters& c = m_fused_counters[layout];
+	m_fused_verify_mem = &mem;
+	m_fused_verify_total = total;
 	const GIFPackedReg* r = reinterpret_cast<const GIFPackedReg*>(mem);
 
 	if (layout == 0)
@@ -4201,7 +4299,11 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	c.accepted++;
 	if (FusedVerifyTakeSkip(c))
 	{
-		FusedVerifyRestore(m_fused_snap);
+		if (!FusedVerifyRestore(m_fused_snap))
+		{
+			FusedVerifyFail(name, "restore_size", c.seen, "");
+			return;
+		}
 		if (layout == 0)
 			(this->*m_fused_run_l1)(r, total);
 		else if (layout == 1)
@@ -4217,7 +4319,11 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	FusedVerifySnap fused_flush = m_fused_flush;
 	FusedVerifyCapture(m_fused_post);
 
-	FusedVerifyRestore(m_fused_snap);
+	if (!FusedVerifyRestore(m_fused_snap))
+	{
+		FusedVerifyFail(name, "restore_size", c.seen, "");
+		return;
+	}
 	m_fused_verify_skip = 0;
 	m_fused_flush_captured = false;
 	m_fused_trial_kicks = 0;
@@ -4229,7 +4335,11 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	m_fused_verify_guard = 0;
 	if (FusedVerifyTakeSkip(c))
 	{
-		FusedVerifyRestore(m_fused_snap);
+		if (!FusedVerifyRestore(m_fused_snap))
+		{
+			FusedVerifyFail(name, "restore_size", c.seen, "");
+			return;
+		}
 		if (layout == 0)
 			(this->*m_fused_run_l1)(r, total);
 		else if (layout == 1)
@@ -4293,7 +4403,11 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 			c.verify_f_ok++;
 	}
 
-	FusedVerifyRestore(m_fused_snap);
+	if (!FusedVerifyRestore(m_fused_snap))
+	{
+		FusedVerifyFail(name, "restore_size", c.seen, "");
+		return;
+	}
 	if (layout == 0)
 		(this->*m_fused_run_l1)(r, total);
 	else if (layout == 1)
@@ -4306,7 +4420,6 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 void GSState::FusedVerifyRunL1(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL1 handler)
 {
 	m_fused_run_l1 = handler;
-	m_fused_run_layout = 0;
 	FusedVerifyDualRun(path, mem, total, 0, "L1");
 }
 
@@ -4314,14 +4427,12 @@ void GSState::FusedVerifyRunL2(GIFPath& path, const u8*& mem, u32 total, u32 pai
 {
 	m_fused_run_l2 = handler;
 	m_fused_run_pairs = pairs;
-	m_fused_run_layout = 1;
 	FusedVerifyDualRun(path, mem, total, 1, "L2");
 }
 
 void GSState::FusedVerifyRunL3(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL3 handler)
 {
 	m_fused_run_l3 = handler;
-	m_fused_run_layout = 2;
 	FusedVerifyDualRun(path, mem, total, 2, "L3");
 }
 #endif
