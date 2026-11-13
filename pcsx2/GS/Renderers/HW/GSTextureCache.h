@@ -22,7 +22,27 @@ class GSHwHack;
 #define GS_TC_LOOKUP_STATS 0
 #endif
 
-#if GS_TC_LOOKUP_STATS
+// Skip the draw-target walk when the list head is already the answer.
+#ifndef GS_TC_FAST_LOOKUP
+#define GS_TC_FAST_LOOKUP 0
+#endif
+// Oracle that the front-target shortcut matches the full walk.
+#ifndef GS_TC_FAST_LOOKUP_VERIFY
+#define GS_TC_FAST_LOOKUP_VERIFY 0
+#endif
+// Deliberately mismatch one shortcut field so the verify check must fire.
+#ifndef GS_TC_FAST_LOOKUP_MUTATE
+#define GS_TC_FAST_LOOKUP_MUTATE 0
+#endif
+
+#if GS_TC_FAST_LOOKUP_VERIFY && !GS_TC_FAST_LOOKUP
+#error GS_TC_FAST_LOOKUP_VERIFY requires GS_TC_FAST_LOOKUP
+#endif
+#if GS_TC_FAST_LOOKUP_MUTATE && !GS_TC_FAST_LOOKUP_VERIFY
+#error GS_TC_FAST_LOOKUP_MUTATE requires GS_TC_FAST_LOOKUP_VERIFY
+#endif
+
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
 #include <chrono>
 #endif
 
@@ -553,6 +573,11 @@ private:
 		const GSVector4i draw_rc = GSVector4i::zero(), bool is_shuffle = false, bool possible_clear = false,
 		bool preserve_scale = false, GSTextureCache::Source* src = nullptr, GSTextureCache::Target* ds = nullptr, int offset = -1);
 
+#if GS_TC_FAST_LOOKUP
+	Target* FrontDrawTarget(GIFRegTEX0 TEX0, float scale, int type, bool preserve_rgb, bool preserve_alpha,
+		const GSVector4i& draw_rect);
+#endif
+
 public:
 	Target* CreateTarget(GIFRegTEX0 TEX0, const GSVector2i& size, const GSVector2i& valid_size, float scale, int type, bool used = true,
 		u32 fbmask = 0, bool is_frame = false, bool preload = GSConfig.PreloadFrameWithGSData, bool preserve_target = true,
@@ -675,6 +700,15 @@ public:
 	u64 m_lookup_stats_tf_src_this = 0;
 
 	void PrintLookupStatsIfDue();
+#endif
+
+#if GS_TC_FAST_LOOKUP_VERIFY
+	u64 m_fl_hits = 0;
+	u64 m_fl_misses = 0;
+	u64 m_fl_verified = 0;
+	std::chrono::steady_clock::time_point m_fl_last{};
+
+	void PrintFastLookupVerifyIfDue();
 #endif
 };
 

@@ -35,7 +35,7 @@
 #include <chrono>
 #endif
 
-#if GS_TC_LOOKUP_STATS
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
 #include "GS/Renderers/HW/GSTextureCache.h"
 #endif
 
@@ -628,6 +628,10 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 #if GS_TC_LOOKUP_STATS
 	if (g_texture_cache)
 		g_texture_cache->PrintLookupStatsIfDue();
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+	if (g_texture_cache)
+		g_texture_cache->PrintFastLookupVerifyIfDue();
 #endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
 	{

@@ -20,6 +20,12 @@
 #include <cinttypes>
 #include <math.h>
 
+#if GS_TC_FAST_LOOKUP_VERIFY
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+#endif>
+
 #ifdef __APPLE__
 #include <stdlib.h>
 #else
@@ -2479,6 +2485,57 @@ void GSTextureCache::PrintLookupStatsIfDue()
 }
 #endif
 
+#if GS_TC_FAST_LOOKUP
+GSTextureCache::Target* GSTextureCache::FrontDrawTarget(GIFRegTEX0 TEX0, float scale, int type, bool preserve_rgb,
+	bool preserve_alpha, const GSVector4i& draw_rect)
+{
+	if (m_dst[type].empty())
+		return nullptr;
+
+	Target* t = *m_dst[type].begin();
+	if (!t || !t->m_texture || t->m_type != type)
+		return nullptr;
+	if (t->m_TEX0.TBP0 != TEX0.TBP0)
+		return nullptr;
+	if (t->m_TEX0.TBW != TEX0.TBW)
+		return nullptr;
+	if (t->m_TEX0.PSM != TEX0.PSM)
+		return nullptr;
+	if (t->m_scale != scale)
+		return nullptr;
+	if (!t->m_valid_rgb)
+		return nullptr;
+	if (!preserve_rgb && !preserve_alpha && draw_rect.rintersect(t->m_valid).eq(t->m_valid))
+		return nullptr;
+	return t;
+}
+#endif
+
+#if GS_TC_FAST_LOOKUP_VERIFY
+void GSTextureCache::PrintFastLookupVerifyIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_fl_last == std::chrono::steady_clock::time_point{})
+	{
+		m_fl_last = now;
+		return;
+	}
+	if (now - m_fl_last < std::chrono::seconds(1))
+		return;
+
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_fl_last).count();
+	Console.WriteLn("GSTCVERIFY: ms=%lld fl_hits=%llu fl_misses=%llu fl_verified=%llu",
+		static_cast<long long>(ms),
+		static_cast<unsigned long long>(m_fl_hits),
+		static_cast<unsigned long long>(m_fl_misses),
+		static_cast<unsigned long long>(m_fl_verified));
+	m_fl_hits = 0;
+	m_fl_misses = 0;
+	m_fl_verified = 0;
+	m_fl_last = now;
+}
+#endif
+
 GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const GSVector2i& size, float scale, int type,
 	bool used, u32 fbmask, bool preload, bool preserve_rgb, bool preserve_alpha, const GSVector4i draw_rect,
 	bool is_shuffle, bool possible_clear, bool preserve_scale, GSTextureCache::Source* src, GSTextureCache::Target* ds, int offset)
@@ -2514,6 +2571,285 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		else
 			m_lookup_stats.ldt_front++;
 	}
+#endif
+#if GS_TC_FAST_LOOKUP
+	Target* const fl_head = FrontDrawTarget(TEX0, scale, type, preserve_rgb, preserve_alpha, draw_rect);
+#if GS_TC_FAST_LOOKUP_VERIFY
+	const bool fl_would_hit = (fl_head != nullptr);
+	std::vector<Target*> fl_dst0;
+	std::vector<Target*> fl_dst1;
+	alignas(Target) u8 fl_target_bytes[sizeof(Target)] = {};
+	std::vector<GSDirtyRect> fl_dirty;
+	GSTexture::State fl_tex_state = GSTexture::State::Dirty;
+	u32 fl_tex_clear_color = 0;
+	float fl_tex_clear_depth = 0.0f;
+	u64 fl_target_mem = m_target_memory_usage;
+	GSTexture* fl_tex = nullptr;
+	if (fl_would_hit)
+	{
+		m_fl_hits++;
+		for (Target* p : m_dst[0])
+			fl_dst0.push_back(p);
+		for (Target* p : m_dst[1])
+			fl_dst1.push_back(p);
+		memcpy(fl_target_bytes, fl_head, sizeof(Target));
+		Target* const fl_exp = reinterpret_cast<Target*>(fl_target_bytes);
+		fl_exp->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
+		fl_exp->m_used |= used;
+#if GS_TC_FAST_LOOKUP_MUTATE
+		fl_exp->readbacks_since_draw = 0x6d757461;
+#else
+		fl_exp->readbacks_since_draw = 0;
+#endif
+		fl_dirty.assign(fl_head->m_dirty.begin(), fl_head->m_dirty.end());
+		fl_tex = fl_head->m_texture;
+		if (fl_tex)
+		{
+			fl_tex_state = fl_tex->GetState();
+			fl_tex_clear_color = fl_tex->GetClearColor();
+			fl_tex_clear_depth = fl_tex->GetClearDepth();
+		}
+	}
+	else
+	{
+		m_fl_misses++;
+	}
+	auto fl_fail = [](const char*) {
+		pxFailRel("GSTCVERIFY mismatch");
+		std::abort();
+	};
+	auto fl_verify = [&](Target* full) {
+		if (!fl_would_hit)
+			return;
+		if (full != fl_head)
+		{
+			Console.WriteLn("GSTCVERIFY: returned pointer differed: shortcut=%p full=%p",
+				static_cast<void*>(fl_head), static_cast<void*>(full));
+			fl_fail("GSTCVERIFY: returned pointer differed");
+		}
+		auto check_list = [&](int idx, const std::vector<Target*>& snap) {
+			size_t n = 0;
+			for (Target* p : m_dst[idx])
+			{
+				if (n >= snap.size() || p != snap[n])
+				{
+					Console.WriteLn("GSTCVERIFY: m_dst[%d][%llu] differed: shortcut=%p full=%p", idx,
+						static_cast<unsigned long long>(n),
+						static_cast<void*>(n < snap.size() ? snap[n] : nullptr), static_cast<void*>(p));
+					fl_fail("GSTCVERIFY: m_dst list differed");
+				}
+				n++;
+			}
+			if (n != snap.size())
+			{
+				Console.WriteLn("GSTCVERIFY: m_dst[%d] size differed: shortcut=%llu full=%llu", idx,
+					static_cast<unsigned long long>(snap.size()), static_cast<unsigned long long>(n));
+				fl_fail("GSTCVERIFY: m_dst size differed");
+			}
+		};
+		check_list(0, fl_dst0);
+		check_list(1, fl_dst1);
+		const Target* exp = reinterpret_cast<const Target*>(fl_target_bytes);
+		if (full->m_32_bits_fmt != exp->m_32_bits_fmt)
+		{
+			Console.WriteLn("GSTCVERIFY: m_32_bits_fmt differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_32_bits_fmt), static_cast<int>(full->m_32_bits_fmt));
+			fl_fail("GSTCVERIFY: m_32_bits_fmt differed");
+		}
+		if (full->m_used != exp->m_used)
+		{
+			Console.WriteLn("GSTCVERIFY: m_used differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_used), static_cast<int>(full->m_used));
+			fl_fail("GSTCVERIFY: m_used differed");
+		}
+		if (full->readbacks_since_draw != exp->readbacks_since_draw)
+		{
+			Console.WriteLn("GSTCVERIFY: readbacks_since_draw differed: shortcut=%d full=%d",
+				exp->readbacks_since_draw, full->readbacks_since_draw);
+			fl_fail("GSTCVERIFY: readbacks_since_draw differed");
+		}
+		if (full->m_texture != exp->m_texture)
+		{
+			Console.WriteLn("GSTCVERIFY: m_texture differed: shortcut=%p full=%p",
+				static_cast<void*>(exp->m_texture), static_cast<void*>(full->m_texture));
+			fl_fail("GSTCVERIFY: m_texture differed");
+		}
+		if (memcmp(&full->m_TEX0, &exp->m_TEX0, sizeof(GIFRegTEX0)) != 0)
+		{
+			Console.WriteLn("GSTCVERIFY: m_TEX0 differed: shortcut=%08x full=%08x",
+				exp->m_TEX0.U32[0], full->m_TEX0.U32[0]);
+			fl_fail("GSTCVERIFY: m_TEX0 differed");
+		}
+		if (memcmp(&full->m_TEXA, &exp->m_TEXA, sizeof(GIFRegTEXA)) != 0)
+		{
+			Console.WriteLn("GSTCVERIFY: m_TEXA differed");
+			fl_fail("GSTCVERIFY: m_TEXA differed");
+		}
+		if (full->m_unscaled_size != exp->m_unscaled_size)
+		{
+			Console.WriteLn("GSTCVERIFY: m_unscaled_size differed: shortcut=%dx%d full=%dx%d",
+				exp->m_unscaled_size.x, exp->m_unscaled_size.y, full->m_unscaled_size.x, full->m_unscaled_size.y);
+			fl_fail("GSTCVERIFY: m_unscaled_size differed");
+		}
+		if (full->m_scale != exp->m_scale)
+		{
+			Console.WriteLn("GSTCVERIFY: m_scale differed: shortcut=%f full=%f", exp->m_scale, full->m_scale);
+			fl_fail("GSTCVERIFY: m_scale differed");
+		}
+		if (full->m_age != exp->m_age)
+		{
+			Console.WriteLn("GSTCVERIFY: m_age differed: shortcut=%d full=%d", exp->m_age, full->m_age);
+			fl_fail("GSTCVERIFY: m_age differed");
+		}
+		if (full->m_end_block != exp->m_end_block)
+		{
+			Console.WriteLn("GSTCVERIFY: m_end_block differed: shortcut=%u full=%u", exp->m_end_block, full->m_end_block);
+			fl_fail("GSTCVERIFY: m_end_block differed");
+		}
+		if (full->m_was_dst_matched != exp->m_was_dst_matched)
+		{
+			Console.WriteLn("GSTCVERIFY: m_was_dst_matched differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_was_dst_matched), static_cast<int>(full->m_was_dst_matched));
+			fl_fail("GSTCVERIFY: m_was_dst_matched differed");
+		}
+		if (full->m_shared_texture != exp->m_shared_texture)
+		{
+			Console.WriteLn("GSTCVERIFY: m_shared_texture differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_shared_texture), static_cast<int>(full->m_shared_texture));
+			fl_fail("GSTCVERIFY: m_shared_texture differed");
+		}
+		if (full->m_type != exp->m_type)
+		{
+			Console.WriteLn("GSTCVERIFY: m_type differed: shortcut=%d full=%d", exp->m_type, full->m_type);
+			fl_fail("GSTCVERIFY: m_type differed");
+		}
+		if (full->m_alpha_max != exp->m_alpha_max || full->m_alpha_min != exp->m_alpha_min)
+		{
+			Console.WriteLn("GSTCVERIFY: m_alpha_min/max differed: shortcut=%d/%d full=%d/%d",
+				exp->m_alpha_min, exp->m_alpha_max, full->m_alpha_min, full->m_alpha_max);
+			fl_fail("GSTCVERIFY: m_alpha_min/max differed");
+		}
+		if (full->m_alpha_range != exp->m_alpha_range)
+		{
+			Console.WriteLn("GSTCVERIFY: m_alpha_range differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_alpha_range), static_cast<int>(full->m_alpha_range));
+			fl_fail("GSTCVERIFY: m_alpha_range differed");
+		}
+		if (full->m_valid_alpha_low != exp->m_valid_alpha_low || full->m_valid_alpha_high != exp->m_valid_alpha_high)
+		{
+			Console.WriteLn("GSTCVERIFY: m_valid_alpha differed: shortcut=%d/%d full=%d/%d",
+				static_cast<int>(exp->m_valid_alpha_low), static_cast<int>(exp->m_valid_alpha_high),
+				static_cast<int>(full->m_valid_alpha_low), static_cast<int>(full->m_valid_alpha_high));
+			fl_fail("GSTCVERIFY: m_valid_alpha differed");
+		}
+		if (full->m_valid_rgb != exp->m_valid_rgb)
+		{
+			Console.WriteLn("GSTCVERIFY: m_valid_rgb differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_valid_rgb), static_cast<int>(full->m_valid_rgb));
+			fl_fail("GSTCVERIFY: m_valid_rgb differed");
+		}
+		if (full->m_rt_alpha_scale != exp->m_rt_alpha_scale)
+		{
+			Console.WriteLn("GSTCVERIFY: m_rt_alpha_scale differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_rt_alpha_scale), static_cast<int>(full->m_rt_alpha_scale));
+			fl_fail("GSTCVERIFY: m_rt_alpha_scale differed");
+		}
+		if (full->m_downscaled != exp->m_downscaled)
+		{
+			Console.WriteLn("GSTCVERIFY: m_downscaled differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_downscaled), static_cast<int>(full->m_downscaled));
+			fl_fail("GSTCVERIFY: m_downscaled differed");
+		}
+		if (full->m_last_draw != exp->m_last_draw)
+		{
+			Console.WriteLn("GSTCVERIFY: m_last_draw differed: shortcut=%llu full=%llu",
+				static_cast<unsigned long long>(exp->m_last_draw), static_cast<unsigned long long>(full->m_last_draw));
+			fl_fail("GSTCVERIFY: m_last_draw differed");
+		}
+		if (full->m_is_frame != exp->m_is_frame)
+		{
+			Console.WriteLn("GSTCVERIFY: m_is_frame differed: shortcut=%d full=%d",
+				static_cast<int>(exp->m_is_frame), static_cast<int>(full->m_is_frame));
+			fl_fail("GSTCVERIFY: m_is_frame differed");
+		}
+		if (full->OffsetHack_modxy != exp->OffsetHack_modxy)
+		{
+			Console.WriteLn("GSTCVERIFY: OffsetHack_modxy differed: shortcut=%f full=%f",
+				exp->OffsetHack_modxy, full->OffsetHack_modxy);
+			fl_fail("GSTCVERIFY: OffsetHack_modxy differed");
+		}
+		if (!full->m_valid.eq(exp->m_valid))
+		{
+			Console.WriteLn("GSTCVERIFY: m_valid differed");
+			fl_fail("GSTCVERIFY: m_valid differed");
+		}
+		if (!full->m_drawn_since_read.eq(exp->m_drawn_since_read))
+		{
+			Console.WriteLn("GSTCVERIFY: m_drawn_since_read differed");
+			fl_fail("GSTCVERIFY: m_drawn_since_read differed");
+		}
+		if (full->m_dirty.size() != fl_dirty.size())
+		{
+			Console.WriteLn("GSTCVERIFY: m_dirty size differed: shortcut=%llu full=%llu",
+				static_cast<unsigned long long>(fl_dirty.size()),
+				static_cast<unsigned long long>(full->m_dirty.size()));
+			fl_fail("GSTCVERIFY: m_dirty size differed");
+		}
+		if (!fl_dirty.empty() &&
+			memcmp(full->m_dirty.data(), fl_dirty.data(), fl_dirty.size() * sizeof(GSDirtyRect)) != 0)
+		{
+			Console.WriteLn("GSTCVERIFY: m_dirty contents differed");
+			fl_fail("GSTCVERIFY: m_dirty contents differed");
+		}
+		if (memcmp(full, exp, sizeof(Target)) != 0)
+		{
+			Console.WriteLn("GSTCVERIFY: Target bytes differed");
+			fl_fail("GSTCVERIFY: Target bytes differed");
+		}
+		if (!full->m_texture)
+		{
+			Console.WriteLn("GSTCVERIFY: texture pointer differed: shortcut=%p full=%p",
+				static_cast<void*>(fl_tex), static_cast<void*>(full->m_texture));
+			fl_fail("GSTCVERIFY: texture pointer differed");
+		}
+		if (full->m_texture->GetState() != fl_tex_state)
+		{
+			Console.WriteLn("GSTCVERIFY: texture state differed: shortcut=%d full=%d",
+				static_cast<int>(fl_tex_state), static_cast<int>(full->m_texture->GetState()));
+			fl_fail("GSTCVERIFY: texture state differed");
+		}
+		if (full->m_texture->GetClearColor() != fl_tex_clear_color)
+		{
+			Console.WriteLn("GSTCVERIFY: texture clear color differed: shortcut=%08x full=%08x",
+				fl_tex_clear_color, full->m_texture->GetClearColor());
+			fl_fail("GSTCVERIFY: texture clear color differed");
+		}
+		if (full->m_texture->GetClearDepth() != fl_tex_clear_depth)
+		{
+			Console.WriteLn("GSTCVERIFY: texture clear depth differed: shortcut=%f full=%f",
+				fl_tex_clear_depth, full->m_texture->GetClearDepth());
+			fl_fail("GSTCVERIFY: texture clear depth differed");
+		}
+		if (m_target_memory_usage != fl_target_mem)
+		{
+			Console.WriteLn("GSTCVERIFY: m_target_memory_usage differed: shortcut=%llu full=%llu",
+				static_cast<unsigned long long>(fl_target_mem),
+				static_cast<unsigned long long>(m_target_memory_usage));
+			fl_fail("GSTCVERIFY: m_target_memory_usage differed");
+		}
+		m_fl_verified++;
+	};
+#else
+	if (fl_head)
+	{
+		// needs proper testing
+		fl_head->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
+		fl_head->m_used |= used;
+		fl_head->readbacks_since_draw = 0;
+		pxAssert(fl_head->m_texture && fl_head->m_scale == scale);
+		return fl_head;
+	}
+#endif
 #endif
 	const GSLocalMemory::psm_t& psm_s = GSLocalMemory::m_psm[TEX0.PSM];
 	const u32 bp = TEX0.TBP0;
@@ -2928,7 +3264,13 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 
 			dst = Target::Create(new_TEX0, rescaler.m_new_size.x, rescaler.m_new_size.y, rescaler.m_scale, type, rescaler.m_clear);
 			if (!dst)
+			{
+#if GS_TC_FAST_LOOKUP_VERIFY
+				fl_verify(nullptr);
+				PrintFastLookupVerifyIfDue();
+#endif
 				return nullptr;
+			}
 
 			dst->m_32_bits_fmt = dst_match->m_32_bits_fmt;
 			dst->OffsetHack_modxy = dst_match->OffsetHack_modxy;
@@ -3036,6 +3378,10 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		pxAssert(dst->m_texture && dst->m_scale == rescaler.m_scale);
 	}
 
+#if GS_TC_FAST_LOOKUP_VERIFY
+	fl_verify(dst);
+	PrintFastLookupVerifyIfDue();
+#endif
 	return dst;
 }
 
