@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "GSTextureCache.h"
+#include "GS/GSTextureCacheFastLookup.h"
 #include "GSTextureReplacements.h"
 #include "GSRendererHW.h"
 #include "GS/GSState.h"
@@ -2510,84 +2511,23 @@ GSTextureCache::Target* GSTextureCache::FrontDrawTarget(GIFRegTEX0 TEX0, float s
 	return t;
 }
 
+template <typename T>
+static inline void ApplyFrontDrawTargetHit(T* t, GIFRegTEX0 TEX0, bool used)
+{
+	t->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
+	t->m_used |= used;
+	t->readbacks_since_draw = 0;
+}
+
 bool GSTextureCache::SourceMap::AnyPageUsed(const u64* bits, u32 start, u32 count)
 {
-	if (count == 0)
-		return false;
-	if (count >= GS_MAX_PAGES)
-	{
-		for (u32 w = 0; w < GS_MAX_PAGES / 64; w++)
-		{
-			if (bits[w])
-				return true;
-		}
-		return false;
-	}
-
-	auto range_used = [bits](u32 first, u32 last) -> bool {
-		if (first >= last)
-			return false;
-		const u32 first_w = first / 64;
-		const u32 last_w = (last - 1) / 64;
-		const u32 first_b = first % 64;
-		if (first_w == last_w)
-		{
-			const u32 width = last - first;
-			const u64 mask = (width == 64) ? ~u64{0} : (((u64{1} << width) - 1) << first_b);
-			return (bits[first_w] & mask) != 0;
-		}
-		if ((bits[first_w] >> first_b) != 0)
-			return true;
-		for (u32 w = first_w + 1; w < last_w; w++)
-		{
-			if (bits[w])
-				return true;
-		}
-		const u32 last_b = last % 64;
-		const u64 last_mask = (last_b == 0) ? ~u64{0} : ((u64{1} << last_b) - 1);
-		return (bits[last_w] & last_mask) != 0;
-	};
-
-	start %= GS_MAX_PAGES;
-	const u32 end = start + count;
-	if (end <= GS_MAX_PAGES)
-		return range_used(start, end);
-	return range_used(start, GS_MAX_PAGES) || range_used(0, end - GS_MAX_PAGES);
+	return GSTextureCacheAnyPageUsed(bits, start, count);
 }
 
 static bool FastLookupLoopPagesSpan(const GSOffset& off, const GSVector4i& rect, u32& first, u32& count)
 {
-	if (rect.left < 0 || rect.top < 0 || rect.right < rect.left || rect.bottom < rect.top)
-		return false;
-
 	const GSVector2i page_size = GSLocalMemory::m_psm[off.psm()].pgs;
-	const int page_w = page_size.x;
-	const int page_h = page_size.y;
-	if (page_w <= 0 || page_h <= 0 || (page_w & (page_w - 1)) != 0 || (page_h & (page_h - 1)) != 0)
-		return false;
-
-	const int topPg = rect.top / page_h;
-	const int botPg = (rect.bottom + page_h - 1) / page_h;
-	const int yCnt = botPg - topPg;
-	const int bwPg = static_cast<int>((off.bw() * 64u) / static_cast<u32>(page_w));
-	if (yCnt <= 0 || bwPg < 0)
-		return false;
-
-	const bool aligned = (off.bp() & 0x1f) == 0;
-	const int xStart = rect.left / page_w;
-	const int xEnd = ((rect.right + page_w - 1) / page_w) + (aligned ? 0 : 1);
-	if (xEnd <= xStart)
-		return false;
-
-	const int looper_bp = static_cast<int>(off.bp() >> 5) + topPg * bwPg;
-	const int first_pos = looper_bp + xStart;
-	const int last_pos = looper_bp + (yCnt - 1) * bwPg + xEnd;
-	if (first_pos < 0 || last_pos <= first_pos)
-		return false;
-
-	first = static_cast<u32>(first_pos);
-	count = static_cast<u32>(last_pos - first_pos);
-	return true;
+	return FastLookupLoopPagesSpan(off.bp(), off.bw(), page_size.x, page_size.y, rect, first, count);
 }
 
 bool GSTextureCache::NoSourceUnderWrite(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp)
@@ -2746,9 +2686,42 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 	Target* const fl_head = FrontDrawTarget(TEX0, scale, type, preserve_rgb, preserve_alpha, draw_rect);
 #if GS_TC_FAST_LOOKUP_VERIFY
 	const bool fl_would_hit = (fl_head != nullptr);
-	std::vector<Target*> fl_dst0;
-	std::vector<Target*> fl_dst1;
-	alignas(Target) u8 fl_target_bytes[sizeof(Target)] = {};
+	std::vector<const void*> fl_dst0;
+	std::vector<const void*> fl_dst1;
+	struct FrontDrawTargetSnapshot
+	{
+		GSTexture* m_texture = nullptr;
+		GIFRegTEX0 m_TEX0 = {};
+		GIFRegTEXA m_TEXA = {};
+		GSVector2i m_unscaled_size = {};
+		float m_scale = 0.0f;
+		int m_age = 0;
+		u32 m_end_block = 0;
+		bool m_32_bits_fmt = false;
+		bool m_was_dst_matched = false;
+		bool m_shared_texture = false;
+		int m_type = 0;
+		int m_alpha_max = 0;
+		int m_alpha_min = 0;
+		bool m_alpha_range = false;
+		bool m_valid_alpha_low = false;
+		bool m_valid_alpha_high = false;
+		bool m_valid_rgb = false;
+		bool m_rt_alpha_scale = false;
+		bool m_downscaled = false;
+		u64 m_last_draw = 0;
+		bool m_is_frame = false;
+		bool m_used = false;
+		float OffsetHack_modxy = 0.0f;
+		GSVector4i m_valid{};
+		bool m_end_of_valid_known = false;
+		u32 m_end_of_valid_layout = 0;
+		GSVector4i m_end_of_valid_rect{};
+		u32 m_end_of_valid_block = 0;
+		GSVector4i m_drawn_since_read{};
+		int readbacks_since_draw = 0;
+	};
+	FrontDrawTargetSnapshot fl_exp;
 	std::vector<GSDirtyRect> fl_dirty;
 	GSTexture::State fl_tex_state = GSTexture::State::Dirty;
 	u32 fl_tex_clear_color = 0;
@@ -2762,14 +2735,39 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 			fl_dst0.push_back(p);
 		for (Target* p : m_dst[1])
 			fl_dst1.push_back(p);
-		memcpy(fl_target_bytes, fl_head, sizeof(Target));
-		Target* const fl_exp = reinterpret_cast<Target*>(fl_target_bytes);
-		fl_exp->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
-		fl_exp->m_used |= used;
+		fl_exp.m_texture = fl_head->m_texture;
+		fl_exp.m_TEX0 = fl_head->m_TEX0;
+		fl_exp.m_TEXA = fl_head->m_TEXA;
+		fl_exp.m_unscaled_size = fl_head->m_unscaled_size;
+		fl_exp.m_scale = fl_head->m_scale;
+		fl_exp.m_age = fl_head->m_age;
+		fl_exp.m_end_block = fl_head->m_end_block;
+		fl_exp.m_32_bits_fmt = fl_head->m_32_bits_fmt;
+		fl_exp.m_was_dst_matched = fl_head->m_was_dst_matched;
+		fl_exp.m_shared_texture = fl_head->m_shared_texture;
+		fl_exp.m_type = fl_head->m_type;
+		fl_exp.m_alpha_max = fl_head->m_alpha_max;
+		fl_exp.m_alpha_min = fl_head->m_alpha_min;
+		fl_exp.m_alpha_range = fl_head->m_alpha_range;
+		fl_exp.m_valid_alpha_low = fl_head->m_valid_alpha_low;
+		fl_exp.m_valid_alpha_high = fl_head->m_valid_alpha_high;
+		fl_exp.m_valid_rgb = fl_head->m_valid_rgb;
+		fl_exp.m_rt_alpha_scale = fl_head->m_rt_alpha_scale;
+		fl_exp.m_downscaled = fl_head->m_downscaled;
+		fl_exp.m_last_draw = fl_head->m_last_draw;
+		fl_exp.m_is_frame = fl_head->m_is_frame;
+		fl_exp.m_used = fl_head->m_used;
+		fl_exp.OffsetHack_modxy = fl_head->OffsetHack_modxy;
+		fl_exp.m_valid = fl_head->m_valid;
+		fl_exp.m_end_of_valid_known = fl_head->m_end_of_valid_known;
+		fl_exp.m_end_of_valid_layout = fl_head->m_end_of_valid_layout;
+		fl_exp.m_end_of_valid_rect = fl_head->m_end_of_valid_rect;
+		fl_exp.m_end_of_valid_block = fl_head->m_end_of_valid_block;
+		fl_exp.m_drawn_since_read = fl_head->m_drawn_since_read;
+		fl_exp.readbacks_since_draw = fl_head->readbacks_since_draw;
+		ApplyFrontDrawTargetHit(&fl_exp, TEX0, used);
 #if GS_TC_FAST_LOOKUP_MUTATE == 1
-		fl_exp->readbacks_since_draw = 0x6d757461;
-#else
-		fl_exp->readbacks_since_draw = 0;
+		fl_exp.readbacks_since_draw = 0x6d757461;
 #endif
 		fl_dirty.assign(fl_head->m_dirty.begin(), fl_head->m_dirty.end());
 		fl_tex = fl_head->m_texture;
@@ -2797,15 +2795,16 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 				static_cast<void*>(fl_head), static_cast<void*>(full));
 			fl_fail("GSTCVERIFY: returned pointer differed");
 		}
-		auto check_list = [&](int idx, const std::vector<Target*>& snap) {
+		auto check_list = [&](int idx, const std::vector<const void*>& snap) {
 			size_t n = 0;
 			for (Target* p : m_dst[idx])
 			{
-				if (n >= snap.size() || p != snap[n])
+				const void* addr = p;
+				if (n >= snap.size() || addr != snap[n])
 				{
 					Console.WriteLn("GSTCVERIFY: m_dst[%d][%llu] differed: shortcut=%p full=%p", idx,
 						static_cast<unsigned long long>(n),
-						static_cast<void*>(n < snap.size() ? snap[n] : nullptr), static_cast<void*>(p));
+						const_cast<void*>(n < snap.size() ? snap[n] : nullptr), static_cast<void*>(p));
 					fl_fail("GSTCVERIFY: m_dst list differed");
 				}
 				n++;
@@ -2819,141 +2818,163 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		};
 		check_list(0, fl_dst0);
 		check_list(1, fl_dst1);
-		const Target* exp = reinterpret_cast<const Target*>(fl_target_bytes);
-		if (full->m_32_bits_fmt != exp->m_32_bits_fmt)
+		if (full->m_32_bits_fmt != fl_exp.m_32_bits_fmt)
 		{
 			Console.WriteLn("GSTCVERIFY: m_32_bits_fmt differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_32_bits_fmt), static_cast<int>(full->m_32_bits_fmt));
+				static_cast<int>(fl_exp.m_32_bits_fmt), static_cast<int>(full->m_32_bits_fmt));
 			fl_fail("GSTCVERIFY: m_32_bits_fmt differed");
 		}
-		if (full->m_used != exp->m_used)
+		if (full->m_used != fl_exp.m_used)
 		{
 			Console.WriteLn("GSTCVERIFY: m_used differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_used), static_cast<int>(full->m_used));
+				static_cast<int>(fl_exp.m_used), static_cast<int>(full->m_used));
 			fl_fail("GSTCVERIFY: m_used differed");
 		}
-		if (full->readbacks_since_draw != exp->readbacks_since_draw)
+		if (full->readbacks_since_draw != fl_exp.readbacks_since_draw)
 		{
 			Console.WriteLn("GSTCVERIFY: readbacks_since_draw differed: shortcut=%d full=%d",
-				exp->readbacks_since_draw, full->readbacks_since_draw);
+				fl_exp.readbacks_since_draw, full->readbacks_since_draw);
 			fl_fail("GSTCVERIFY: readbacks_since_draw differed");
 		}
-		if (full->m_texture != exp->m_texture)
+		if (full->m_texture != fl_exp.m_texture)
 		{
 			Console.WriteLn("GSTCVERIFY: m_texture differed: shortcut=%p full=%p",
-				static_cast<void*>(exp->m_texture), static_cast<void*>(full->m_texture));
+				static_cast<void*>(fl_exp.m_texture), static_cast<void*>(full->m_texture));
 			fl_fail("GSTCVERIFY: m_texture differed");
 		}
-		if (memcmp(&full->m_TEX0, &exp->m_TEX0, sizeof(GIFRegTEX0)) != 0)
+		if (memcmp(&full->m_TEX0, &fl_exp.m_TEX0, sizeof(GIFRegTEX0)) != 0)
 		{
 			Console.WriteLn("GSTCVERIFY: m_TEX0 differed: shortcut=%08x full=%08x",
-				exp->m_TEX0.U32[0], full->m_TEX0.U32[0]);
+				fl_exp.m_TEX0.U32[0], full->m_TEX0.U32[0]);
 			fl_fail("GSTCVERIFY: m_TEX0 differed");
 		}
-		if (memcmp(&full->m_TEXA, &exp->m_TEXA, sizeof(GIFRegTEXA)) != 0)
+		if (memcmp(&full->m_TEXA, &fl_exp.m_TEXA, sizeof(GIFRegTEXA)) != 0)
 		{
 			Console.WriteLn("GSTCVERIFY: m_TEXA differed");
 			fl_fail("GSTCVERIFY: m_TEXA differed");
 		}
-		if (full->m_unscaled_size != exp->m_unscaled_size)
+		if (full->m_unscaled_size != fl_exp.m_unscaled_size)
 		{
 			Console.WriteLn("GSTCVERIFY: m_unscaled_size differed: shortcut=%dx%d full=%dx%d",
-				exp->m_unscaled_size.x, exp->m_unscaled_size.y, full->m_unscaled_size.x, full->m_unscaled_size.y);
+				fl_exp.m_unscaled_size.x, fl_exp.m_unscaled_size.y, full->m_unscaled_size.x, full->m_unscaled_size.y);
 			fl_fail("GSTCVERIFY: m_unscaled_size differed");
 		}
-		if (full->m_scale != exp->m_scale)
+		if (full->m_scale != fl_exp.m_scale)
 		{
-			Console.WriteLn("GSTCVERIFY: m_scale differed: shortcut=%f full=%f", exp->m_scale, full->m_scale);
+			Console.WriteLn("GSTCVERIFY: m_scale differed: shortcut=%f full=%f", fl_exp.m_scale, full->m_scale);
 			fl_fail("GSTCVERIFY: m_scale differed");
 		}
-		if (full->m_age != exp->m_age)
+		if (full->m_age != fl_exp.m_age)
 		{
-			Console.WriteLn("GSTCVERIFY: m_age differed: shortcut=%d full=%d", exp->m_age, full->m_age);
+			Console.WriteLn("GSTCVERIFY: m_age differed: shortcut=%d full=%d", fl_exp.m_age, full->m_age);
 			fl_fail("GSTCVERIFY: m_age differed");
 		}
-		if (full->m_end_block != exp->m_end_block)
+		if (full->m_end_block != fl_exp.m_end_block)
 		{
-			Console.WriteLn("GSTCVERIFY: m_end_block differed: shortcut=%u full=%u", exp->m_end_block, full->m_end_block);
+			Console.WriteLn("GSTCVERIFY: m_end_block differed: shortcut=%u full=%u", fl_exp.m_end_block, full->m_end_block);
 			fl_fail("GSTCVERIFY: m_end_block differed");
 		}
-		if (full->m_was_dst_matched != exp->m_was_dst_matched)
+		if (full->m_was_dst_matched != fl_exp.m_was_dst_matched)
 		{
 			Console.WriteLn("GSTCVERIFY: m_was_dst_matched differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_was_dst_matched), static_cast<int>(full->m_was_dst_matched));
+				static_cast<int>(fl_exp.m_was_dst_matched), static_cast<int>(full->m_was_dst_matched));
 			fl_fail("GSTCVERIFY: m_was_dst_matched differed");
 		}
-		if (full->m_shared_texture != exp->m_shared_texture)
+		if (full->m_shared_texture != fl_exp.m_shared_texture)
 		{
 			Console.WriteLn("GSTCVERIFY: m_shared_texture differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_shared_texture), static_cast<int>(full->m_shared_texture));
+				static_cast<int>(fl_exp.m_shared_texture), static_cast<int>(full->m_shared_texture));
 			fl_fail("GSTCVERIFY: m_shared_texture differed");
 		}
-		if (full->m_type != exp->m_type)
+		if (full->m_type != fl_exp.m_type)
 		{
-			Console.WriteLn("GSTCVERIFY: m_type differed: shortcut=%d full=%d", exp->m_type, full->m_type);
+			Console.WriteLn("GSTCVERIFY: m_type differed: shortcut=%d full=%d", fl_exp.m_type, full->m_type);
 			fl_fail("GSTCVERIFY: m_type differed");
 		}
-		if (full->m_alpha_max != exp->m_alpha_max || full->m_alpha_min != exp->m_alpha_min)
+		if (full->m_alpha_max != fl_exp.m_alpha_max || full->m_alpha_min != fl_exp.m_alpha_min)
 		{
 			Console.WriteLn("GSTCVERIFY: m_alpha_min/max differed: shortcut=%d/%d full=%d/%d",
-				exp->m_alpha_min, exp->m_alpha_max, full->m_alpha_min, full->m_alpha_max);
+				fl_exp.m_alpha_min, fl_exp.m_alpha_max, full->m_alpha_min, full->m_alpha_max);
 			fl_fail("GSTCVERIFY: m_alpha_min/max differed");
 		}
-		if (full->m_alpha_range != exp->m_alpha_range)
+		if (full->m_alpha_range != fl_exp.m_alpha_range)
 		{
 			Console.WriteLn("GSTCVERIFY: m_alpha_range differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_alpha_range), static_cast<int>(full->m_alpha_range));
+				static_cast<int>(fl_exp.m_alpha_range), static_cast<int>(full->m_alpha_range));
 			fl_fail("GSTCVERIFY: m_alpha_range differed");
 		}
-		if (full->m_valid_alpha_low != exp->m_valid_alpha_low || full->m_valid_alpha_high != exp->m_valid_alpha_high)
+		if (full->m_valid_alpha_low != fl_exp.m_valid_alpha_low || full->m_valid_alpha_high != fl_exp.m_valid_alpha_high)
 		{
 			Console.WriteLn("GSTCVERIFY: m_valid_alpha differed: shortcut=%d/%d full=%d/%d",
-				static_cast<int>(exp->m_valid_alpha_low), static_cast<int>(exp->m_valid_alpha_high),
+				static_cast<int>(fl_exp.m_valid_alpha_low), static_cast<int>(fl_exp.m_valid_alpha_high),
 				static_cast<int>(full->m_valid_alpha_low), static_cast<int>(full->m_valid_alpha_high));
 			fl_fail("GSTCVERIFY: m_valid_alpha differed");
 		}
-		if (full->m_valid_rgb != exp->m_valid_rgb)
+		if (full->m_valid_rgb != fl_exp.m_valid_rgb)
 		{
 			Console.WriteLn("GSTCVERIFY: m_valid_rgb differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_valid_rgb), static_cast<int>(full->m_valid_rgb));
+				static_cast<int>(fl_exp.m_valid_rgb), static_cast<int>(full->m_valid_rgb));
 			fl_fail("GSTCVERIFY: m_valid_rgb differed");
 		}
-		if (full->m_rt_alpha_scale != exp->m_rt_alpha_scale)
+		if (full->m_rt_alpha_scale != fl_exp.m_rt_alpha_scale)
 		{
 			Console.WriteLn("GSTCVERIFY: m_rt_alpha_scale differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_rt_alpha_scale), static_cast<int>(full->m_rt_alpha_scale));
+				static_cast<int>(fl_exp.m_rt_alpha_scale), static_cast<int>(full->m_rt_alpha_scale));
 			fl_fail("GSTCVERIFY: m_rt_alpha_scale differed");
 		}
-		if (full->m_downscaled != exp->m_downscaled)
+		if (full->m_downscaled != fl_exp.m_downscaled)
 		{
 			Console.WriteLn("GSTCVERIFY: m_downscaled differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_downscaled), static_cast<int>(full->m_downscaled));
+				static_cast<int>(fl_exp.m_downscaled), static_cast<int>(full->m_downscaled));
 			fl_fail("GSTCVERIFY: m_downscaled differed");
 		}
-		if (full->m_last_draw != exp->m_last_draw)
+		if (full->m_last_draw != fl_exp.m_last_draw)
 		{
 			Console.WriteLn("GSTCVERIFY: m_last_draw differed: shortcut=%llu full=%llu",
-				static_cast<unsigned long long>(exp->m_last_draw), static_cast<unsigned long long>(full->m_last_draw));
+				static_cast<unsigned long long>(fl_exp.m_last_draw), static_cast<unsigned long long>(full->m_last_draw));
 			fl_fail("GSTCVERIFY: m_last_draw differed");
 		}
-		if (full->m_is_frame != exp->m_is_frame)
+		if (full->m_is_frame != fl_exp.m_is_frame)
 		{
 			Console.WriteLn("GSTCVERIFY: m_is_frame differed: shortcut=%d full=%d",
-				static_cast<int>(exp->m_is_frame), static_cast<int>(full->m_is_frame));
+				static_cast<int>(fl_exp.m_is_frame), static_cast<int>(full->m_is_frame));
 			fl_fail("GSTCVERIFY: m_is_frame differed");
 		}
-		if (full->OffsetHack_modxy != exp->OffsetHack_modxy)
+		if (full->OffsetHack_modxy != fl_exp.OffsetHack_modxy)
 		{
 			Console.WriteLn("GSTCVERIFY: OffsetHack_modxy differed: shortcut=%f full=%f",
-				exp->OffsetHack_modxy, full->OffsetHack_modxy);
+				fl_exp.OffsetHack_modxy, full->OffsetHack_modxy);
 			fl_fail("GSTCVERIFY: OffsetHack_modxy differed");
 		}
-		if (!full->m_valid.eq(exp->m_valid))
+		if (!full->m_valid.eq(fl_exp.m_valid))
 		{
 			Console.WriteLn("GSTCVERIFY: m_valid differed");
 			fl_fail("GSTCVERIFY: m_valid differed");
 		}
-		if (!full->m_drawn_since_read.eq(exp->m_drawn_since_read))
+		if (full->m_end_of_valid_known != fl_exp.m_end_of_valid_known)
+		{
+			Console.WriteLn("GSTCVERIFY: m_end_of_valid_known differed: shortcut=%d full=%d",
+				static_cast<int>(fl_exp.m_end_of_valid_known), static_cast<int>(full->m_end_of_valid_known));
+			fl_fail("GSTCVERIFY: m_end_of_valid_known differed");
+		}
+		if (full->m_end_of_valid_layout != fl_exp.m_end_of_valid_layout)
+		{
+			Console.WriteLn("GSTCVERIFY: m_end_of_valid_layout differed: shortcut=%u full=%u",
+				fl_exp.m_end_of_valid_layout, full->m_end_of_valid_layout);
+			fl_fail("GSTCVERIFY: m_end_of_valid_layout differed");
+		}
+		if (!full->m_end_of_valid_rect.eq(fl_exp.m_end_of_valid_rect))
+		{
+			Console.WriteLn("GSTCVERIFY: m_end_of_valid_rect differed");
+			fl_fail("GSTCVERIFY: m_end_of_valid_rect differed");
+		}
+		if (full->m_end_of_valid_block != fl_exp.m_end_of_valid_block)
+		{
+			Console.WriteLn("GSTCVERIFY: m_end_of_valid_block differed: shortcut=%u full=%u",
+				fl_exp.m_end_of_valid_block, full->m_end_of_valid_block);
+			fl_fail("GSTCVERIFY: m_end_of_valid_block differed");
+		}
+		if (!full->m_drawn_since_read.eq(fl_exp.m_drawn_since_read))
 		{
 			Console.WriteLn("GSTCVERIFY: m_drawn_since_read differed");
 			fl_fail("GSTCVERIFY: m_drawn_since_read differed");
@@ -2970,11 +2991,6 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		{
 			Console.WriteLn("GSTCVERIFY: m_dirty contents differed");
 			fl_fail("GSTCVERIFY: m_dirty contents differed");
-		}
-		if (memcmp(full, exp, sizeof(Target)) != 0)
-		{
-			Console.WriteLn("GSTCVERIFY: Target bytes differed");
-			fl_fail("GSTCVERIFY: Target bytes differed");
 		}
 		if (!full->m_texture)
 		{
@@ -3013,9 +3029,7 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 	if (fl_head)
 	{
 		// needs proper testing
-		fl_head->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
-		fl_head->m_used |= used;
-		fl_head->readbacks_since_draw = 0;
+		ApplyFrontDrawTargetHit(fl_head, TEX0, used);
 		pxAssert(fl_head->m_texture && fl_head->m_scale == scale);
 		return fl_head;
 	}
