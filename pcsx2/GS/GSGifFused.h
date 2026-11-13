@@ -8,7 +8,7 @@
 // Fuse packed GIF layouts behind this switch. Ships 0.
 // Defined only here, never on the compiler command line: GSState's layout depends on it,
 // so every translation unit must see the same value.
-#define GS_GIF_FUSED_LAYOUTS 0
+#define GS_GIF_FUSED_LAYOUTS 1
 // Dual-run oracle that the fused packed handlers match the per-quadword loop. Ships 0.
 #define GS_GIF_FUSED_VERIFY 0
 // Select a mutation so the verify check must fire: 1 = L2, 2 = L1, 3 = L3. 0 = none.
