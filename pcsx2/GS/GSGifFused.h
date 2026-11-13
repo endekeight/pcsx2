@@ -47,20 +47,19 @@ inline bool MatchPackedLayoutL2x3(u32 nreg, u32 r0, u32 r1, u32 r2)
 
 inline bool MatchPackedLayoutL3(u32 nreg, u32 r0, u32 r1, u32 r2)
 {
-	return nreg == 12 && r0 == 0x02050102 && r1 == 0x01020501 && r2 == 0x05020105;
+	return nreg == 12 && r0 == 0x02050102 && r1 == 0x01020501 && r2 == 0x05010205;
 }
 
 // Packed A+D addresses that must not enter the L1 fused loop.
+// Colour (0x01), ST (0x02), UV (0x03) and fog (0x0a) are accepted: the loop
+// runs the A+D handler first, then the packed ST, RGBA and XYZF2 stores, which
+// read m_q, m_v and the latched UV at the same moment the per-register handlers would.
 inline bool FusedL1AddrAllowed(u8 addr)
 {
 	switch (addr)
 	{
-		case 0x01: // colour, would fight the loop's RGBA
-		case 0x02: // ST, would fight the loop's ST
-		case 0x03: // UV
 		case 0x04: // XYZF2 kick
 		case 0x05: // XYZ2 kick
-		case 0x0a: // FOG
 		case 0x0c: // XYZF3 kick
 		case 0x0d: // XYZ3 kick
 		case 0x53: // starts a transfer
