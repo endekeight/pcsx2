@@ -19,7 +19,16 @@
 // so every translation unit must see the same value.
 #define GS_PARSE_STATS 0
 
+// Count-only census of GIF packed register layouts, by primitive type. Ships 0.
+// Defined only here, never on the compiler command line: GSState's layout depends on it,
+// so every translation unit must see the same value.
+#define GS_GIF_LAYOUT_STATS 0
+
 #if GS_PARSE_STATS
+#include <chrono>
+#endif
+
+#if GS_GIF_LAYOUT_STATS
 #include <chrono>
 #endif
 
@@ -157,6 +166,37 @@ protected:
 	};
 
 	ParseStats m_parse_stats{};
+#endif
+
+#if GS_GIF_LAYOUT_STATS
+	struct GifLayoutEntry
+	{
+		u64 regs = 0;
+		u8 nreg = 0;
+		u8 type = 0;
+		u8 prim = 0;
+		u64 packets = 0;
+		u64 qwords = 0;
+	};
+
+	struct GifLayoutStats
+	{
+		GifLayoutEntry table[64]{};
+		u32 used = 0;
+		u8 packed_prim[4]{};
+		u64 overflow_packets = 0;
+		u64 overflow_qwords = 0;
+		u64 reglist_q = 0;
+		u64 image_q = 0;
+		u64 empty_tags = 0;
+		u64 transfers = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	GifLayoutStats m_gif_layout_stats{};
+
+	void AddGifLayoutPacked(const GIFPath& path, u8 prim, u64 packets, u64 qwords);
+	void MaybePrintGifLayoutStats();
 #endif
 
 	GSVertex m_v = {};

@@ -3352,6 +3352,77 @@ void GSState::ReadbackTextureCache()
 {
 }
 
+#if GS_GIF_LAYOUT_STATS
+void GSState::AddGifLayoutPacked(const GIFPath& path, u8 prim, u64 packets, u64 qwords)
+{
+	u64 regs = 0;
+	for (u32 i = 0; i < path.nreg; i++)
+		regs |= static_cast<u64>(path.GetReg(i)) << (4 * i);
+
+	GifLayoutStats& s = m_gif_layout_stats;
+	for (u32 i = 0; i < s.used; i++)
+	{
+		GifLayoutEntry& e = s.table[i];
+		if (e.regs == regs && e.nreg == path.nreg && e.type == path.type && e.prim == prim)
+		{
+			e.packets += packets;
+			e.qwords += qwords;
+			return;
+		}
+	}
+
+	if (s.used < 64)
+	{
+		GifLayoutEntry& e = s.table[s.used++];
+		e.regs = regs;
+		e.nreg = static_cast<u8>(path.nreg);
+		e.type = static_cast<u8>(path.type);
+		e.prim = prim;
+		e.packets = packets;
+		e.qwords = qwords;
+		return;
+	}
+
+	s.overflow_packets += packets;
+	s.overflow_qwords += qwords;
+}
+
+void GSState::MaybePrintGifLayoutStats()
+{
+	GifLayoutStats& s = m_gif_layout_stats;
+	const auto now = std::chrono::steady_clock::now();
+	if (s.last == std::chrono::steady_clock::time_point{})
+	{
+		s.last = now;
+		return;
+	}
+	if (now - s.last < std::chrono::seconds(1))
+		return;
+
+	for (u32 i = 0; i < s.used; i++)
+	{
+		const GifLayoutEntry& e = s.table[i];
+		if (e.packets == 0 && e.qwords == 0)
+			continue;
+		Console.WriteLn("GSGIFLAYOUT: regs=%016llx nreg=%u type=%u prim=%u packets=%llu qwords=%llu",
+			static_cast<unsigned long long>(e.regs),
+			static_cast<unsigned>(e.nreg),
+			static_cast<unsigned>(e.type),
+			static_cast<unsigned>(e.prim),
+			static_cast<unsigned long long>(e.packets),
+			static_cast<unsigned long long>(e.qwords));
+	}
+	Console.WriteLn("GSGIFLAYOUT: totals reglist_q=%llu image_q=%llu empty_tags=%llu transfers=%llu overflow_packets=%llu overflow_q=%llu",
+		static_cast<unsigned long long>(s.reglist_q),
+		static_cast<unsigned long long>(s.image_q),
+		static_cast<unsigned long long>(s.empty_tags),
+		static_cast<unsigned long long>(s.transfers),
+		static_cast<unsigned long long>(s.overflow_packets),
+		static_cast<unsigned long long>(s.overflow_qwords));
+	s.last = now;
+}
+#endif
+
 template void GSState::Transfer<0>(const u8* mem, u32 size);
 template void GSState::Transfer<1>(const u8* mem, u32 size);
 template void GSState::Transfer<2>(const u8* mem, u32 size);
@@ -3363,6 +3434,10 @@ void GSState::Transfer(const u8* mem, u32 size)
 	const u8* start = mem;
 
 	GIFPath& path = m_path[index];
+
+#if GS_GIF_LAYOUT_STATS
+	m_gif_layout_stats.transfers++;
+#endif
 
 	while (size > 0)
 	{
@@ -3383,7 +3458,21 @@ void GSState::Transfer(const u8* mem, u32 size)
 
 				if (path.tag.PRE && path.tag.FLG == GIF_FLG_PACKED)
 					ApplyPRIM(path.tag.PRIM);
+#if GS_GIF_LAYOUT_STATS
+				if (path.tag.FLG == GIF_FLG_PACKED)
+				{
+					// PRE/PRIM already applied, so this is the primitive the packet's vertices will use.
+					m_gif_layout_stats.packed_prim[index] = static_cast<u8>(m_env.PRIM.PRIM);
+					AddGifLayoutPacked(path, m_gif_layout_stats.packed_prim[index], 1, 0);
+				}
+#endif
 			}
+#if GS_GIF_LAYOUT_STATS
+			else
+			{
+				m_gif_layout_stats.empty_tags++;
+			}
+#endif
 		}
 		else
 		{
@@ -3395,6 +3484,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 					// get to the start of the loop
 					if (path.reg != 0)
 					{
+#if GS_GIF_LAYOUT_STATS
+						const u32 gif_layout_q = size;
+#endif
 						do
 						{
 							(this->*m_fpGIFPackedRegHandlers[path.GetReg()])((GIFPackedReg*)mem);
@@ -3402,6 +3494,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 							mem += sizeof(GIFPackedReg);
 							size--;
 						} while (path.StepReg() && size > 0 && path.reg != 0);
+#if GS_GIF_LAYOUT_STATS
+						AddGifLayoutPacked(path, m_gif_layout_stats.packed_prim[index], 0, gif_layout_q - size);
+#endif
 					}
 
 					// all data available? usually is
@@ -3410,6 +3505,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 
 					if (size >= total)
 					{
+#if GS_GIF_LAYOUT_STATS
+						AddGifLayoutPacked(path, m_gif_layout_stats.packed_prim[index], 0, total);
+#endif
 						size -= total;
 
 						switch (path.type)
@@ -3457,6 +3555,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 					}
 					else
 					{
+#if GS_GIF_LAYOUT_STATS
+						const u32 gif_layout_q = size;
+#endif
 						do
 						{
 							(this->*m_fpGIFPackedRegHandlers[path.GetReg()])((GIFPackedReg*)mem);
@@ -3464,12 +3565,18 @@ void GSState::Transfer(const u8* mem, u32 size)
 							mem += sizeof(GIFPackedReg);
 							size--;
 						} while (path.StepReg() && size > 0);
+#if GS_GIF_LAYOUT_STATS
+						AddGifLayoutPacked(path, m_gif_layout_stats.packed_prim[index], 0, gif_layout_q - size);
+#endif
 					}
 
 					break;
 				case GIF_FLG_REGLIST:
 					// TODO: do it similar to packed operation
 
+#if GS_GIF_LAYOUT_STATS
+					m_gif_layout_stats.reglist_q += size;
+#endif
 					size *= 2;
 
 					do
@@ -3484,6 +3591,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 						mem += sizeof(GIFReg);
 
 					size /= 2;
+#if GS_GIF_LAYOUT_STATS
+					m_gif_layout_stats.reglist_q -= size;
+#endif
 
 					break;
 				case GIF_FLG_IMAGE2:
@@ -3513,6 +3623,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 					mem += len * 16;
 					path.nloop -= len;
 					size -= len;
+#if GS_GIF_LAYOUT_STATS
+					m_gif_layout_stats.image_q += static_cast<u64>(len);
+#endif
 
 					break;
 				}
@@ -3542,6 +3655,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 			path.nloop = 0;
 		}
 	}
+#if GS_GIF_LAYOUT_STATS
+	MaybePrintGifLayoutStats();
+#endif
 }
 
 template <class T>
