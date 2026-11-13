@@ -2632,7 +2632,7 @@ void GSTextureCache::PrintFastLookupVerifyIfDue()
 		return;
 
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_fl_last).count();
-	Console.WriteLn("GSTCVERIFY: ms=%lld fl_hits=%llu fl_misses=%llu fl_verified=%llu ns_calls=%llu ns_early=%llu ns_verified=%llu ns_stale_occupied=%llu",
+	Console.WriteLn("GSTCVERIFY: ms=%lld fl_hits=%llu fl_misses=%llu fl_verified=%llu ns_calls=%llu ns_early=%llu ns_verified=%llu ns_stale_occupied=%llu eb_calls=%llu eb_hits=%llu eb_verified=%llu",
 		static_cast<long long>(ms),
 		static_cast<unsigned long long>(m_fl_hits),
 		static_cast<unsigned long long>(m_fl_misses),
@@ -2640,7 +2640,10 @@ void GSTextureCache::PrintFastLookupVerifyIfDue()
 		static_cast<unsigned long long>(m_ns_calls),
 		static_cast<unsigned long long>(m_ns_early),
 		static_cast<unsigned long long>(m_ns_verified),
-		static_cast<unsigned long long>(m_ns_stale_occupied));
+		static_cast<unsigned long long>(m_ns_stale_occupied),
+		static_cast<unsigned long long>(m_eb_calls),
+		static_cast<unsigned long long>(m_eb_hits),
+		static_cast<unsigned long long>(m_eb_verified));
 	m_fl_hits = 0;
 	m_fl_misses = 0;
 	m_fl_verified = 0;
@@ -2648,6 +2651,9 @@ void GSTextureCache::PrintFastLookupVerifyIfDue()
 	m_ns_early = 0;
 	m_ns_verified = 0;
 	m_ns_stale_occupied = 0;
+	m_eb_calls = 0;
+	m_eb_hits = 0;
+	m_eb_verified = 0;
 	m_fl_last = now;
 }
 
@@ -2760,7 +2766,7 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		Target* const fl_exp = reinterpret_cast<Target*>(fl_target_bytes);
 		fl_exp->m_32_bits_fmt |= (GSLocalMemory::m_psm[TEX0.PSM].bpp != 16);
 		fl_exp->m_used |= used;
-#if GS_TC_FAST_LOOKUP_MUTATE
+#if GS_TC_FAST_LOOKUP_MUTATE == 1
 		fl_exp->readbacks_since_draw = 0x6d757461;
 #else
 		fl_exp->readbacks_since_draw = 0;
@@ -8878,6 +8884,49 @@ void GSTextureCache::Target::UpdateDrawn(const GSVector4i& rect, bool can_update
 	}
 }
 
+#if GS_TC_FAST_LOOKUP
+u32 GSTextureCache::Target::EndBlockOfValid()
+{
+	// needs proper testing
+#if GS_TC_FAST_LOOKUP_VERIFY
+	g_texture_cache->m_eb_calls++;
+#endif
+	const u32 layout = m_TEX0.U32[0] & 0x3ffffff;
+	if (m_end_of_valid_known && layout == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
+	{
+#if GS_TC_FAST_LOOKUP_MUTATE == 3
+		const u32 memo = m_end_of_valid_block ^ 1u;
+#else
+		const u32 memo = m_end_of_valid_block;
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+		g_texture_cache->m_eb_hits++;
+		const u32 real = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
+		if (memo != real)
+		{
+			Console.WriteLn("GSTCVERIFY: EndBlockOfValid memo=%u real=%u layout=0x%x rect=%d,%d,%d,%d",
+				memo, real, layout, m_valid.x, m_valid.y, m_valid.z, m_valid.w);
+			pxFailRel("GSTCVERIFY mismatch");
+			std::abort();
+		}
+		g_texture_cache->m_eb_verified++;
+		g_texture_cache->PrintFastLookupVerifyIfDue();
+#endif
+		return memo;
+	}
+
+	const u32 real = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
+	m_end_of_valid_known = true;
+	m_end_of_valid_layout = layout;
+	m_end_of_valid_rect = m_valid;
+	m_end_of_valid_block = real;
+#if GS_TC_FAST_LOOKUP_VERIFY
+	g_texture_cache->PrintFastLookupVerifyIfDue();
+#endif
+	return real;
+}
+#endif
+
 void GSTextureCache::Target::ResizeValidity(const GSVector4i& rect)
 {
 #if GS_TC_LOOKUP_STATS
@@ -8892,11 +8941,15 @@ void GSTextureCache::Target::ResizeValidity(const GSVector4i& rect)
 		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
 			g_texture_cache->m_lookup_stats.eov_same++;
 #endif
+#if GS_TC_FAST_LOOKUP
+		m_end_block = EndBlockOfValid();
+#else
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
 #if GS_TC_LOOKUP_STATS
 		m_end_of_valid_known = true;
 		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
 		m_end_of_valid_rect = m_valid;
+#endif
 #endif
 	}
 
@@ -8919,11 +8972,15 @@ void GSTextureCache::Target::UpdateValidity(const GSVector4i& rect, bool can_res
 		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
 			g_texture_cache->m_lookup_stats.eov_same++;
 #endif
+#if GS_TC_FAST_LOOKUP
+		m_end_block = EndBlockOfValid();
+#else
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
 #if GS_TC_LOOKUP_STATS
 		m_end_of_valid_known = true;
 		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
 		m_end_of_valid_rect = m_valid;
+#endif
 #endif
 	}
 	else if (can_resize)
@@ -8934,11 +8991,15 @@ void GSTextureCache::Target::UpdateValidity(const GSVector4i& rect, bool can_res
 		if (m_end_of_valid_known && (m_TEX0.U32[0] & 0x3ffffff) == m_end_of_valid_layout && m_valid.eq(m_end_of_valid_rect))
 			g_texture_cache->m_lookup_stats.eov_same++;
 #endif
+#if GS_TC_FAST_LOOKUP
+		m_end_block = EndBlockOfValid();
+#else
 		m_end_block = GSLocalMemory::GetEndBlockAddress(m_TEX0.TBP0, m_TEX0.TBW, m_TEX0.PSM, m_valid);
 #if GS_TC_LOOKUP_STATS
 		m_end_of_valid_known = true;
 		m_end_of_valid_layout = m_TEX0.U32[0] & 0x3ffffff;
 		m_end_of_valid_rect = m_valid;
+#endif
 #endif
 	}
 	// GL_CACHE("TC: UpdateValidity (0x%x->0x%x) from R:%d,%d Valid: %d,%d", m_TEX0.TBP0, m_end_block, rect.z, rect.w, m_valid.z, m_valid.w);
@@ -9043,7 +9104,7 @@ void GSTextureCache::SourceMap::Add(Source* s, const GIFRegTEX0& TEX0)
 	s->m_pages.loopPages([this, s](u32 page) {
 		s->m_erase_it[page] = m_map[page].InsertFront(s);
 #if GS_TC_FAST_LOOKUP
-#if !GS_TC_FAST_LOOKUP_MUTATE
+#if GS_TC_FAST_LOOKUP_MUTATE != 2
 		m_page_used[page / 64] |= u64{1} << (page % 64);
 #endif
 #endif

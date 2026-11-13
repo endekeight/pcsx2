@@ -24,14 +24,15 @@ class GSHwHack;
 
 // Skip the draw-target walk when the list head is already the answer.
 // Also skip InvalidateVideoMem source walks when no source occupies the written pages.
+// Also reuse the last end-block of a target's valid rectangle when the inputs are unchanged.
 #ifndef GS_TC_FAST_LOOKUP
 #define GS_TC_FAST_LOOKUP 0
 #endif
-// Oracle that the front-target and no-source-under-write shortcuts match the full walks.
+// Oracle that the front-target, no-source-under-write, and end-block shortcuts match the full paths.
 #ifndef GS_TC_FAST_LOOKUP_VERIFY
 #define GS_TC_FAST_LOOKUP_VERIFY 0
 #endif
-// Deliberately mismatch one shortcut field so the verify check must fire.
+// Select one mutation so the verify check must fire: 1 = C1, 2 = C2, 3 = C3. 0 = none.
 #ifndef GS_TC_FAST_LOOKUP_MUTATE
 #define GS_TC_FAST_LOOKUP_MUTATE 0
 #endif
@@ -282,10 +283,13 @@ public:
 		float OffsetHack_modxy = 0.0f;
 		GSDirtyRectList m_dirty;
 		GSVector4i m_valid{};
-#if GS_TC_LOOKUP_STATS
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP
 		bool m_end_of_valid_known = false;
 		u32 m_end_of_valid_layout = 0;
 		GSVector4i m_end_of_valid_rect{};
+#if GS_TC_FAST_LOOKUP
+		u32 m_end_of_valid_block = 0;
+#endif
 #endif
 		GSVector4i m_drawn_since_read{};
 		int readbacks_since_draw = 0;
@@ -305,6 +309,9 @@ public:
 		void UpdateDrawn(const GSVector4i& rect, bool can_resize = true);
 		void ResizeValidity(const GSVector4i& rect);
 		void UpdateValidity(const GSVector4i& rect, bool can_resize = true);
+#if GS_TC_FAST_LOOKUP
+		u32 EndBlockOfValid();
+#endif
 
 		void ScaleRTAlpha();
 		void UnscaleRTAlpha();
@@ -720,6 +727,9 @@ public:
 	u64 m_ns_early = 0;
 	u64 m_ns_verified = 0;
 	u64 m_ns_stale_occupied = 0;
+	u64 m_eb_calls = 0;
+	u64 m_eb_hits = 0;
+	u64 m_eb_verified = 0;
 	u32 m_ns_visited = 0;
 	bool m_ns_would_early = false;
 	std::chrono::steady_clock::time_point m_fl_last{};
