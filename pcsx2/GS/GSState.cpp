@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -237,6 +239,11 @@ void GSState::SetPrimHandlers()
 	SetHandlerXYZ(GS_INVALID, auto_flush);
 
 #undef SetHandlerXYZ
+
+#if GS_GIF_FUSED_LAYOUTS
+	m_fpGIFPackedRegHandlerRGBASTXYZF2[GS_TRIANGLESTRIP] = &GSState::GIFPackedRegHandlerRGBASTXYZF2<GS_TRIANGLESTRIP, auto_flush>;
+	m_fpGIFPackedRegHandlerRGBASTXYZF2[GS_TRIANGLEFAN] = &GSState::GIFPackedRegHandlerRGBASTXYZF2<GS_TRIANGLEFAN, auto_flush>;
+#endif
 }
 
 static constexpr u32 NumIndicesForPrim(u32 prim)
@@ -1564,6 +1571,72 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32
 	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
 }
 
+#if GS_GIF_FUSED_LAYOUTS
+template <u32 prim, bool auto_flush>
+void GSState::GIFPackedRegHandlerRGBASTXYZF2(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs)
+{
+	// needs proper testing
+	const u32 nreg = 1 + pairs * 2;
+	pxAssert(size > 0 && size % nreg == 0);
+
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i mask = GSVector4i::load(0x0c080400);
+		const GSVector4i rgba = GSVector4i::load<false>(r).shuffle8(mask);
+
+		m_v.RGBAQ.U32[0] = (u32)GSVector4i::store(rgba);
+
+		m_v.RGBAQ.Q = m_q;
+
+		for (u32 p = 0; p < pairs; p++)
+		{
+			const GIFPackedReg* RESTRICT r_st = r + 1 + p * 2;
+			const GIFPackedReg* RESTRICT r_xyz = r_st + 1;
+
+			const GSVector4i st = GSVector4i::loadl(&r_st->U64[0]);
+
+			GSVector4i q = GSVector4i::loadl(&r_st->U64[1]);
+			GSVector4i::storel(&m_v.ST, st);
+
+			// Vexx (character shadow)
+			// q = 0 (st also 0 on the first 16 vertices), setting it to 1.0f to avoid div by zero later
+			q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
+
+			// Suikoden 4
+			// creates some nan for Q. Let's avoid undefined behavior (See GIFRegHandlerRGBAQ)
+			q = GSVector4i::cast(GSVector4::cast(q).replace_nan(GSVector4::m_max));
+
+			GSVector4::store(&m_q, GSVector4::cast(q));
+
+			// hide behind a define for now to avoid spam in the above cases for users
+#if defined(PCSX2_DEVBUILD) || defined(_DEBUG)
+			if (std::isnan(m_v.ST.S) || std::isnan(m_v.ST.T))
+				Console.Warning("S or T is nan");
+#endif
+
+			const bool skip = r_xyz->XYZF2.Skip();
+
+			if (!skip || GSUtil::GetPrimClass(m_prev_env.PRIM.PRIM) != GSUtil::GetPrimClass(m_env.PRIM.PRIM) || (m_dirty_gs_regs & (1 << DIRTY_REG_XYOFFSET)))
+				CheckFlushes();
+
+			GSVector4i xy = GSVector4i::loadnt(r_xyz);
+			GSVector4i zf = xy.zwzw();
+
+			xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+			zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+			m_v.m[1] = xy.upl32(zf);
+
+			VertexKick<prim, auto_flush>(skip);
+		}
+
+		r += nreg;
+	}
+}
+#endif
+
 void GSState::GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r, u32 size)
 {
 }
@@ -2372,6 +2445,9 @@ void GSState::FlushDraw(GSFlushReason reason)
 			if (!needs_flush[0] && !needs_flush[1])
 				return;
 		}
+#if GS_GIF_FUSED_VERIFY
+		FusedVerifyNoteFlush();
+#endif
 		m_state_flush_reason = reason;
 
 		// Used to prompt the current draw that it's modifying its own CLUT.
@@ -2405,6 +2481,10 @@ void GSState::FlushWrite()
 
 	if (len <= 0)
 		return;
+
+#if GS_GIF_FUSED_VERIFY
+	FusedVerifyNoteWrite();
+#endif
 
 	GSVector4i r;
 
@@ -3069,6 +3149,10 @@ void GSState::Move()
 	if (m_env.TRXDIR.XDIR == 3)
 		return;
 
+#if GS_GIF_FUSED_VERIFY
+	FusedVerifyNoteMove();
+#endif
+
 	int sx = m_env.TRXPOS.SSAX;
 	int sy = m_env.TRXPOS.SSAY;
 	int dx = m_env.TRXPOS.DSAX;
@@ -3423,6 +3507,388 @@ void GSState::MaybePrintGifLayoutStats()
 }
 #endif
 
+#if GS_GIF_FUSED_VERIFY
+void GSState::FusedVerifyCapture(FusedVerifySnap& s)
+{
+	s.v = m_v;
+	s.q = m_q;
+	s.dirty_gs_regs = m_dirty_gs_regs;
+	s.backed_up_ctx = m_backed_up_ctx;
+	s.temp_draw_rect = temp_draw_rect;
+	s.env = m_env;
+	s.prev_env = m_prev_env;
+	s.texflush_flag = m_texflush_flag;
+	s.isPackedUV_HackFlag = m_isPackedUV_HackFlag;
+	s.tr_x = m_tr.x;
+	s.tr_y = m_tr.y;
+	s.tr_w = m_tr.w;
+	s.tr_h = m_tr.h;
+	s.tr_start = m_tr.start;
+	s.tr_end = m_tr.end;
+	s.tr_total = m_tr.total;
+	s.tr_rect = m_tr.rect;
+	s.tr_blit = m_tr.m_blit;
+	s.tr_pos = m_tr.m_pos;
+	s.tr_reg = m_tr.m_reg;
+	s.tr_write = m_tr.write;
+	s.current_buffer_idx = m_current_buffer_idx;
+	s.used_buffers_idx = m_used_buffers_idx;
+	s.recent_buffer_switch = m_recent_buffer_switch;
+	s.xyof = m_xyof;
+	s.scissor_invalid = m_scissor_invalid;
+	memcpy(s.packed_xyz, m_fpGIFPackedRegHandlerXYZ, sizeof(s.packed_xyz));
+	memcpy(s.reg_xyz, m_fpGIFRegHandlerXYZ, sizeof(s.reg_xyz));
+	memcpy(s.packed_c, m_fpGIFPackedRegHandlersC, sizeof(s.packed_c));
+	memcpy(s.packed_handlers, m_fpGIFPackedRegHandlers, sizeof(s.packed_handlers));
+	memcpy(s.reg_handlers, m_fpGIFRegHandlers, sizeof(s.reg_handlers));
+#if GS_GIF_FUSED_LAYOUTS
+	memcpy(s.l2_handlers, m_fpGIFPackedRegHandlerRGBASTXYZF2, sizeof(s.l2_handlers));
+#endif
+	memcpy(s.env_buffers, m_env_buffers, sizeof(s.env_buffers));
+	for (int i = 0; i < MAX_DRAW_BUFFERS; i++)
+	{
+		const GSVertexBuff& vb = m_vertex_buffers[i];
+		s.v_head[i] = vb.head;
+		s.v_tail[i] = vb.tail;
+		s.v_next[i] = vb.next;
+		s.v_xy_tail[i] = vb.xy_tail;
+		s.v_xy[i][0] = vb.xy[0];
+		s.v_xy[i][1] = vb.xy[1];
+		s.v_xy[i][2] = vb.xy[2];
+		s.v_xy[i][3] = vb.xy[3];
+		s.v_xyhead[i] = vb.xyhead;
+		if (vb.buff)
+			s.vbuff[i].assign(vb.buff, vb.buff + vb.tail);
+		else
+			s.vbuff[i].clear();
+		s.i_tail[i] = m_index_buffers[i].tail;
+		if (m_index_buffers[i].buff)
+			s.ibuff[i].assign(m_index_buffers[i].buff, m_index_buffers[i].buff + m_index_buffers[i].tail);
+		else
+			s.ibuff[i].clear();
+	}
+}
+
+void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
+{
+	m_v = s.v;
+	m_q = s.q;
+	m_dirty_gs_regs = s.dirty_gs_regs;
+	m_backed_up_ctx = s.backed_up_ctx;
+	temp_draw_rect = s.temp_draw_rect;
+	m_env = s.env;
+	m_prev_env = s.prev_env;
+	m_texflush_flag = s.texflush_flag;
+	m_isPackedUV_HackFlag = s.isPackedUV_HackFlag;
+	m_tr.x = s.tr_x;
+	m_tr.y = s.tr_y;
+	m_tr.w = s.tr_w;
+	m_tr.h = s.tr_h;
+	m_tr.start = s.tr_start;
+	m_tr.end = s.tr_end;
+	m_tr.total = s.tr_total;
+	m_tr.rect = s.tr_rect;
+	m_tr.m_blit = s.tr_blit;
+	m_tr.m_pos = s.tr_pos;
+	m_tr.m_reg = s.tr_reg;
+	m_tr.write = s.tr_write;
+	m_current_buffer_idx = s.current_buffer_idx;
+	m_used_buffers_idx = s.used_buffers_idx;
+	m_recent_buffer_switch = s.recent_buffer_switch;
+	m_xyof = s.xyof;
+	m_scissor_invalid = s.scissor_invalid;
+	memcpy(m_fpGIFPackedRegHandlerXYZ, s.packed_xyz, sizeof(s.packed_xyz));
+	memcpy(m_fpGIFRegHandlerXYZ, s.reg_xyz, sizeof(s.reg_xyz));
+	memcpy(m_fpGIFPackedRegHandlersC, s.packed_c, sizeof(s.packed_c));
+	memcpy(m_fpGIFPackedRegHandlers, s.packed_handlers, sizeof(s.packed_handlers));
+	memcpy(m_fpGIFRegHandlers, s.reg_handlers, sizeof(s.reg_handlers));
+#if GS_GIF_FUSED_LAYOUTS
+	memcpy(m_fpGIFPackedRegHandlerRGBASTXYZF2, s.l2_handlers, sizeof(s.l2_handlers));
+#endif
+	memcpy(m_env_buffers, s.env_buffers, sizeof(s.env_buffers));
+	for (int i = 0; i < MAX_DRAW_BUFFERS; i++)
+	{
+		GSVertexBuff& vb = m_vertex_buffers[i];
+		vb.head = s.v_head[i];
+		vb.tail = s.v_tail[i];
+		vb.next = s.v_next[i];
+		vb.xy_tail = s.v_xy_tail[i];
+		vb.xy[0] = s.v_xy[i][0];
+		vb.xy[1] = s.v_xy[i][1];
+		vb.xy[2] = s.v_xy[i][2];
+		vb.xy[3] = s.v_xy[i][3];
+		vb.xyhead = s.v_xyhead[i];
+		if (vb.buff && !s.vbuff[i].empty())
+			memcpy(vb.buff, s.vbuff[i].data(), s.vbuff[i].size() * sizeof(GSVertex));
+		m_index_buffers[i].tail = s.i_tail[i];
+		if (m_index_buffers[i].buff && !s.ibuff[i].empty())
+			memcpy(m_index_buffers[i].buff, s.ibuff[i].data(), s.ibuff[i].size() * sizeof(u16));
+	}
+	m_vertex = &m_vertex_buffers[m_current_buffer_idx];
+	m_index = &m_index_buffers[m_current_buffer_idx];
+	m_draw_env = &m_env;
+	PRIM = &m_env.PRIM;
+	m_context = const_cast<GSDrawingContext*>(&m_draw_env->CTXT[PRIM->CTXT]);
+}
+
+void GSState::FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values)
+{
+	if (values && values[0] != '\0')
+		Console.WriteLn("GSFUSED: mismatch layout=%s field=%s packet=%llu %s", layout, field, static_cast<unsigned long long>(packet), values);
+	else
+		Console.WriteLn("GSFUSED: mismatch layout=%s field=%s packet=%llu", layout, field, static_cast<unsigned long long>(packet));
+	pxFailRel("GSFUSED mismatch");
+}
+
+bool GSState::FusedVerifyCompare(const FusedVerifySnap& fused, const char* layout, u64 packet)
+{
+	char values[128];
+
+	for (int i = 0; i < MAX_DRAW_BUFFERS; i++)
+	{
+		const GSVertexBuff& vb = m_vertex_buffers[i];
+		if (vb.head != fused.v_head[i])
+		{
+			snprintf(values, sizeof(values), "a=%u b=%u", vb.head, fused.v_head[i]);
+			FusedVerifyFail(layout, "head", packet, values);
+			return false;
+		}
+		if (vb.tail != fused.v_tail[i])
+		{
+			snprintf(values, sizeof(values), "a=%u b=%u", vb.tail, fused.v_tail[i]);
+			FusedVerifyFail(layout, "tail", packet, values);
+			return false;
+		}
+		if (vb.next != fused.v_next[i])
+		{
+			snprintf(values, sizeof(values), "a=%u b=%u", vb.next, fused.v_next[i]);
+			FusedVerifyFail(layout, "next", packet, values);
+			return false;
+		}
+		if (vb.xy_tail != fused.v_xy_tail[i])
+		{
+			snprintf(values, sizeof(values), "a=%u b=%u", vb.xy_tail, fused.v_xy_tail[i]);
+			FusedVerifyFail(layout, "xy_tail", packet, values);
+			return false;
+		}
+		if (memcmp(vb.xy, fused.v_xy[i], sizeof(vb.xy)) != 0)
+		{
+			FusedVerifyFail(layout, "xy", packet, "");
+			return false;
+		}
+		if (memcmp(&vb.xyhead, &fused.v_xyhead[i], sizeof(vb.xyhead)) != 0)
+		{
+			FusedVerifyFail(layout, "xyhead", packet, "");
+			return false;
+		}
+		if (vb.buff && fused.vbuff[i].size() == vb.tail &&
+			memcmp(vb.buff, fused.vbuff[i].data(), vb.tail * sizeof(GSVertex)) != 0)
+		{
+			FusedVerifyFail(layout, "vertex", packet, "");
+			return false;
+		}
+		if (m_index_buffers[i].tail != fused.i_tail[i])
+		{
+			snprintf(values, sizeof(values), "a=%u b=%u", m_index_buffers[i].tail, fused.i_tail[i]);
+			FusedVerifyFail(layout, "index_tail", packet, values);
+			return false;
+		}
+		if (m_index_buffers[i].buff && fused.ibuff[i].size() == m_index_buffers[i].tail &&
+			memcmp(m_index_buffers[i].buff, fused.ibuff[i].data(), m_index_buffers[i].tail * sizeof(u16)) != 0)
+		{
+			FusedVerifyFail(layout, "index", packet, "");
+			return false;
+		}
+	}
+
+	if (memcmp(&temp_draw_rect, &fused.temp_draw_rect, sizeof(temp_draw_rect)) != 0)
+	{
+		FusedVerifyFail(layout, "temp_draw_rect", packet, "");
+		return false;
+	}
+	if (memcmp(&m_v, &fused.v, sizeof(m_v)) != 0)
+	{
+		FusedVerifyFail(layout, "m_v", packet, "");
+		return false;
+	}
+	if (memcmp(&m_q, &fused.q, sizeof(m_q)) != 0)
+	{
+		u32 a = 0, b = 0;
+		memcpy(&a, &m_q, sizeof(a));
+		memcpy(&b, &fused.q, sizeof(b));
+		snprintf(values, sizeof(values), "a=%08x b=%08x", a, b);
+		FusedVerifyFail(layout, "m_q", packet, values);
+		return false;
+	}
+	if (m_dirty_gs_regs != fused.dirty_gs_regs)
+	{
+		snprintf(values, sizeof(values), "a=%08x b=%08x", m_dirty_gs_regs, fused.dirty_gs_regs);
+		FusedVerifyFail(layout, "m_dirty_gs_regs", packet, values);
+		return false;
+	}
+	if (m_backed_up_ctx != fused.backed_up_ctx)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", m_backed_up_ctx, fused.backed_up_ctx);
+		FusedVerifyFail(layout, "m_backed_up_ctx", packet, values);
+		return false;
+	}
+	if (memcmp(&m_prev_env, &fused.prev_env, 88) != 0)
+	{
+		FusedVerifyFail(layout, "m_prev_env", packet, "");
+		return false;
+	}
+	if (memcmp(&m_prev_env.CTXT[0], &fused.prev_env.CTXT[0], 96) != 0 ||
+		memcmp(&m_prev_env.CTXT[1], &fused.prev_env.CTXT[1], 96) != 0)
+	{
+		FusedVerifyFail(layout, "m_prev_env.CTXT", packet, "");
+		return false;
+	}
+	for (int ctx = 0; ctx < 2; ctx++)
+	{
+		if (memcmp(&m_prev_env.CTXT[ctx].offset, &fused.prev_env.CTXT[ctx].offset, sizeof(m_prev_env.CTXT[ctx].offset)) != 0)
+		{
+			FusedVerifyFail(layout, "m_prev_env.offset", packet, "");
+			return false;
+		}
+		if (memcmp(&m_prev_env.CTXT[ctx].scissor, &fused.prev_env.CTXT[ctx].scissor, sizeof(m_prev_env.CTXT[ctx].scissor)) != 0)
+		{
+			FusedVerifyFail(layout, "m_prev_env.scissor", packet, "");
+			return false;
+		}
+	}
+	if (memcmp(&m_env.PRIM, &fused.env.PRIM, sizeof(m_env.PRIM)) != 0)
+	{
+		FusedVerifyFail(layout, "m_env.PRIM", packet, "");
+		return false;
+	}
+	if (memcmp(&m_env.CTXT[0], &fused.env.CTXT[0], 96) != 0 || memcmp(&m_env.CTXT[1], &fused.env.CTXT[1], 96) != 0)
+	{
+		FusedVerifyFail(layout, "m_env.CTXT", packet, "");
+		return false;
+	}
+	if (m_texflush_flag != fused.texflush_flag)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", static_cast<int>(m_texflush_flag), static_cast<int>(fused.texflush_flag));
+		FusedVerifyFail(layout, "m_texflush_flag", packet, values);
+		return false;
+	}
+	if (memcmp(&m_xyof, &fused.xyof, sizeof(m_xyof)) != 0)
+	{
+		FusedVerifyFail(layout, "m_xyof", packet, "");
+		return false;
+	}
+	if (m_scissor_invalid != fused.scissor_invalid)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", static_cast<int>(m_scissor_invalid), static_cast<int>(fused.scissor_invalid));
+		FusedVerifyFail(layout, "m_scissor_invalid", packet, values);
+		return false;
+	}
+	if (m_current_buffer_idx != fused.current_buffer_idx)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", m_current_buffer_idx, fused.current_buffer_idx);
+		FusedVerifyFail(layout, "m_current_buffer_idx", packet, values);
+		return false;
+	}
+	if (m_used_buffers_idx != fused.used_buffers_idx)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", m_used_buffers_idx, fused.used_buffers_idx);
+		FusedVerifyFail(layout, "m_used_buffers_idx", packet, values);
+		return false;
+	}
+	if (m_recent_buffer_switch != fused.recent_buffer_switch)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", static_cast<int>(m_recent_buffer_switch), static_cast<int>(fused.recent_buffer_switch));
+		FusedVerifyFail(layout, "m_recent_buffer_switch", packet, values);
+		return false;
+	}
+	return true;
+}
+
+void GSState::MaybePrintFusedStats()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_fused_stats_last == std::chrono::steady_clock::time_point{})
+	{
+		m_fused_stats_last = now;
+		return;
+	}
+	if (now - m_fused_stats_last < std::chrono::seconds(1))
+		return;
+
+	static const char* const names[3] = {"L1", "L2", "L3"};
+	for (int i = 0; i < 3; i++)
+	{
+		const FusedLayoutCounters& c = m_fused_counters[i];
+		Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu",
+			names[i],
+			static_cast<unsigned long long>(c.seen),
+			static_cast<unsigned long long>(c.accepted),
+			static_cast<unsigned long long>(c.refused),
+			static_cast<unsigned long long>(c.verify_a),
+			static_cast<unsigned long long>(c.verify_ok),
+			static_cast<unsigned long long>(c.skip_flush),
+			static_cast<unsigned long long>(c.skip_write),
+			static_cast<unsigned long long>(c.skip_grow),
+			static_cast<unsigned long long>(c.skip_move),
+			static_cast<unsigned long long>(c.skip_partial));
+	}
+	m_fused_stats_last = now;
+}
+
+#if GS_GIF_FUSED_LAYOUTS
+void GSState::FusedVerifyRunL2(GIFPath& path, const u8*& mem, u32 total, u32 pairs, GIFPackedRegHandlerFusedL2 handler)
+{
+	FusedLayoutCounters& c = m_fused_counters[1];
+	m_fused_verify_skip = 0;
+	FusedVerifyCapture(m_fused_snap);
+	m_fused_verify_guard = 1;
+	(this->*handler)(reinterpret_cast<const GIFPackedReg*>(mem), total, pairs);
+	m_fused_verify_guard = 0;
+	c.accepted++;
+	if (m_fused_verify_skip != 0)
+	{
+		if (m_fused_verify_skip & 1u)
+			c.skip_flush++;
+		else if (m_fused_verify_skip & 2u)
+			c.skip_write++;
+		else if (m_fused_verify_skip & 4u)
+			c.skip_grow++;
+		else
+			c.skip_move++;
+		mem += total * sizeof(GIFPackedReg);
+		return;
+	}
+	FusedVerifyCapture(m_fused_post);
+#if GS_GIF_FUSED_MUTATE == 1
+	{
+		u32 qbits = 0;
+		memcpy(&qbits, &m_fused_post.q, sizeof(qbits));
+		qbits ^= 1u;
+		memcpy(&m_fused_post.q, &qbits, sizeof(qbits));
+	}
+#endif
+	FusedVerifyRestore(m_fused_snap);
+	{
+		u32 reg = 0;
+		u32 left = total;
+		const u8* p = mem;
+		do
+		{
+			(this->*m_fpGIFPackedRegHandlers[path.GetReg(reg++)])((GIFPackedReg*)p);
+			p += sizeof(GIFPackedReg);
+			reg = reg & ((int)(reg - path.nreg) >> 31);
+		} while (--left > 0);
+	}
+	c.verify_a++;
+	if (FusedVerifyCompare(m_fused_post, "L2", c.seen))
+		c.verify_ok++;
+	FusedVerifyRestore(m_fused_snap);
+	(this->*handler)(reinterpret_cast<const GIFPackedReg*>(mem), total, pairs);
+	mem += total * sizeof(GIFPackedReg);
+}
+#endif
+#endif
+
 template void GSState::Transfer<0>(const u8* mem, u32 size);
 template void GSState::Transfer<1>(const u8* mem, u32 size);
 template void GSState::Transfer<2>(const u8* mem, u32 size);
@@ -3458,6 +3924,11 @@ void GSState::Transfer(const u8* mem, u32 size)
 
 				if (path.tag.PRE && path.tag.FLG == GIF_FLG_PACKED)
 					ApplyPRIM(path.tag.PRIM);
+#if GS_GIF_FUSED_VERIFY
+				if (path.tag.FLG == GIF_FLG_PACKED &&
+					(path.type == GIFPath::TYPE_RGBASTXYZF2x4 || path.type == GIFPath::TYPE_RGBASTXYZF2x3))
+					m_fused_counters[1].seen++;
+#endif
 #if GS_GIF_LAYOUT_STATS
 				if (path.tag.FLG == GIF_FLG_PACKED)
 				{
@@ -3484,6 +3955,10 @@ void GSState::Transfer(const u8* mem, u32 size)
 					// get to the start of the loop
 					if (path.reg != 0)
 					{
+#if GS_GIF_FUSED_VERIFY
+						if (path.type == GIFPath::TYPE_RGBASTXYZF2x4 || path.type == GIFPath::TYPE_RGBASTXYZF2x3)
+							m_fused_counters[1].skip_partial++;
+#endif
 #if GS_GIF_LAYOUT_STATS
 						const u32 gif_layout_q = size;
 #endif
@@ -3547,6 +4022,42 @@ void GSState::Transfer(const u8* mem, u32 size)
 								mem += total * sizeof(GIFPackedReg);
 
 								break;
+#if GS_GIF_FUSED_LAYOUTS
+							case GIFPath::TYPE_RGBASTXYZF2x4:
+							case GIFPath::TYPE_RGBASTXYZF2x3:
+							{
+								// needs proper testing
+								const u32 pairs = (path.nreg == 9) ? 4u : 3u;
+								const u32 prim = PRIM->PRIM;
+								const GIFPackedRegHandlerFusedL2 handler = m_fpGIFPackedRegHandlerRGBASTXYZF2[prim];
+								if (handler)
+								{
+#if GS_GIF_FUSED_VERIFY
+									FusedVerifyRunL2(path, mem, total, pairs, handler);
+#else
+									(this->*handler)((GIFPackedReg*)mem, total, pairs);
+									mem += total * sizeof(GIFPackedReg);
+#endif
+								}
+								else
+								{
+#if GS_GIF_FUSED_VERIFY
+									m_fused_counters[1].refused++;
+#endif
+									u32 reg = 0;
+
+									do
+									{
+										(this->*m_fpGIFPackedRegHandlers[path.GetReg(reg++)])((GIFPackedReg*)mem);
+
+										mem += sizeof(GIFPackedReg);
+
+										reg = reg & ((int)(reg - path.nreg) >> 31);
+									} while (--total > 0);
+								}
+							}
+							break;
+#endif
 							default:
 								ASSUME(0);
 						}
@@ -3555,6 +4066,10 @@ void GSState::Transfer(const u8* mem, u32 size)
 					}
 					else
 					{
+#if GS_GIF_FUSED_VERIFY
+						if (path.type == GIFPath::TYPE_RGBASTXYZF2x4 || path.type == GIFPath::TYPE_RGBASTXYZF2x3)
+							m_fused_counters[1].skip_partial++;
+#endif
 #if GS_GIF_LAYOUT_STATS
 						const u32 gif_layout_q = size;
 #endif
@@ -3657,6 +4172,9 @@ void GSState::Transfer(const u8* mem, u32 size)
 	}
 #if GS_GIF_LAYOUT_STATS
 	MaybePrintGifLayoutStats();
+#endif
+#if GS_GIF_FUSED_VERIFY
+	MaybePrintFusedStats();
 #endif
 }
 
@@ -3982,6 +4500,9 @@ static void GrowBuffer(T** pbuff, size_t old_count, size_t new_count)
 
 void GSState::GrowVertexBuffer()
 {
+#if GS_GIF_FUSED_VERIFY
+	FusedVerifyNoteGrow();
+#endif
 	const u32 maxcount = std::max<u32>(m_max_vertex_count * 3 / 2, 10000);
 	const u32 new_vertex_count = maxcount;
 	const u32 new_index_count = maxcount * 6; // Worst case index list is a list of points with vs expansion, 6 indices per point

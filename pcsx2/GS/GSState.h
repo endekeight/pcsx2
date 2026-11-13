@@ -12,6 +12,7 @@
 #include "GS/Renderers/Common/GSVertexTrace.h"
 #include "GS/Renderers/Common/GSDevice.h"
 #include "GS/GSVector.h"
+#include "GS/GSGifFused.h"
 #include "GSAlignedClass.h"
 
 // C110 diagnostic: counts GIF packed-vertex parsing and auto-flush work for the GSPARSE line. Ships 0.
@@ -30,6 +31,10 @@
 
 #if GS_GIF_LAYOUT_STATS
 #include <chrono>
+#endif
+#if GS_GIF_FUSED_VERIFY
+#include <chrono>
+#include <vector>
 #endif
 
 class GSDumpBase;
@@ -77,6 +82,12 @@ private:
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size);
 	void GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r, u32 size);
+
+#if GS_GIF_FUSED_LAYOUTS
+	typedef void (GSState::*GIFPackedRegHandlerFusedL2)(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
+	GIFPackedRegHandlerFusedL2 m_fpGIFPackedRegHandlerRGBASTXYZF2[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerRGBASTXYZF2(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
+#endif
 
 	template<int i> void ApplyTEX0(GIFRegTEX0& TEX0);
 	void ApplyPRIM(u32 prim);
@@ -248,6 +259,101 @@ protected:
 	};
 
 	GSDrawBufferEnv m_env_buffers[MAX_DRAW_BUFFERS] = {};
+
+#if GS_GIF_FUSED_VERIFY
+	struct FusedLayoutCounters
+	{
+		u64 seen = 0;
+		u64 accepted = 0;
+		u64 refused = 0;
+		u64 verify_a = 0;
+		u64 verify_ok = 0;
+		u64 skip_flush = 0;
+		u64 skip_write = 0;
+		u64 skip_grow = 0;
+		u64 skip_move = 0;
+		u64 skip_partial = 0;
+	};
+
+	struct FusedVerifySnap
+	{
+		GSVertex v = {};
+		float q = 1.0f;
+		u32 dirty_gs_regs = 0;
+		int backed_up_ctx = 0;
+		GSVector4i temp_draw_rect = GSVector4i::zero();
+		GSDrawingEnvironment env = {};
+		GSDrawingEnvironment prev_env = {};
+		bool texflush_flag = false;
+		bool isPackedUV_HackFlag = false;
+		int tr_x = 0, tr_y = 0, tr_w = 0, tr_h = 0;
+		int tr_start = 0, tr_end = 0, tr_total = 0;
+		GSVector4i tr_rect = GSVector4i::zero();
+		GIFRegBITBLTBUF tr_blit = {};
+		GIFRegTRXPOS tr_pos = {};
+		GIFRegTRXREG tr_reg = {};
+		bool tr_write = false;
+		int current_buffer_idx = 0;
+		int used_buffers_idx = 0;
+		bool recent_buffer_switch = false;
+		GSVector4i xyof = {};
+		bool scissor_invalid = false;
+		GIFPackedRegHandler packed_xyz[8][4] = {};
+		GIFRegHandler reg_xyz[8][4] = {};
+		GIFPackedRegHandlerC packed_c[2] = {};
+		GIFPackedRegHandler packed_handlers[16] = {};
+		GIFRegHandler reg_handlers[256] = {};
+#if GS_GIF_FUSED_LAYOUTS
+		GIFPackedRegHandlerFusedL2 l2_handlers[8] = {};
+#endif
+		GSDrawBufferEnv env_buffers[MAX_DRAW_BUFFERS] = {};
+		u32 v_head[MAX_DRAW_BUFFERS] = {};
+		u32 v_tail[MAX_DRAW_BUFFERS] = {};
+		u32 v_next[MAX_DRAW_BUFFERS] = {};
+		u32 v_xy_tail[MAX_DRAW_BUFFERS] = {};
+		GSVector4i v_xy[MAX_DRAW_BUFFERS][4] = {};
+		GSVector4i v_xyhead[MAX_DRAW_BUFFERS] = {};
+		u32 i_tail[MAX_DRAW_BUFFERS] = {};
+		std::vector<GSVertex> vbuff[MAX_DRAW_BUFFERS];
+		std::vector<u16> ibuff[MAX_DRAW_BUFFERS];
+	};
+
+	FusedLayoutCounters m_fused_counters[3]{};
+	FusedVerifySnap m_fused_snap{};
+	FusedVerifySnap m_fused_post{};
+	std::chrono::steady_clock::time_point m_fused_stats_last{};
+	int m_fused_verify_guard = 0;
+	u32 m_fused_verify_skip = 0;
+
+	void FusedVerifyCapture(FusedVerifySnap& s);
+	void FusedVerifyRestore(const FusedVerifySnap& s);
+	bool FusedVerifyCompare(const FusedVerifySnap& fused, const char* layout, u64 packet);
+	void FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values);
+	void MaybePrintFusedStats();
+	void FusedVerifyNoteFlush()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 1u;
+	}
+	void FusedVerifyNoteWrite()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 2u;
+	}
+	void FusedVerifyNoteGrow()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 4u;
+	}
+	void FusedVerifyNoteMove()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 8u;
+	}
+#if GS_GIF_FUSED_LAYOUTS
+	void FusedVerifyRunL2(GIFPath& path, const u8*& mem, u32 total, u32 pairs, GIFPackedRegHandlerFusedL2 handler);
+#endif
+#endif
 
 	void UpdateContext();
 	void UpdateScissor();

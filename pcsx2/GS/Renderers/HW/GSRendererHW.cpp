@@ -2401,12 +2401,19 @@ void GSRendererHW::Move()
 {
 	if (m_mv && m_mv(*this))
 	{
+#if GS_GIF_FUSED_VERIFY
+		FusedVerifyNoteMove();
+#endif
 		// Handled by HW hack.
 		return;
 	}
 
 	if (m_env.TRXDIR.XDIR == 3)
 		return;
+
+#if GS_GIF_FUSED_VERIFY
+	FusedVerifyNoteMove();
+#endif
 
 	const int sx = m_env.TRXPOS.SSAX;
 	const int sy = m_env.TRXPOS.SSAY;
