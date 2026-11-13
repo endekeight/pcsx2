@@ -67,3 +67,28 @@ TEST(GifFusedLayout, MatchingR0WrongNregMatchesNone)
 	EXPECT_FALSE(MatchPackedLayoutL2x3(9, 0x02040201, 0x00040204, 0));
 	EXPECT_FALSE(MatchPackedLayoutL3(9, 0x02050102, 0x01020501, 0x05020105));
 }
+
+TEST(GifFusedLayout, L1AddrAllowed)
+{
+	EXPECT_FALSE(FusedL1AddrAllowed(0x01));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x02));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x03));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x04));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x05));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x0a));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x0c));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x0d));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x53));
+	EXPECT_FALSE(FusedL1AddrAllowed(0x54));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x00));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x06));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x07));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x08));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x0f));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x1a));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x1b));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x3f));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x50));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x51));
+	EXPECT_TRUE(FusedL1AddrAllowed(0x52));
+}

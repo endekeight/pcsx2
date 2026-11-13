@@ -11,7 +11,7 @@
 #define GS_GIF_FUSED_LAYOUTS 0
 // Dual-run oracle that the fused packed handlers match the per-quadword loop. Ships 0.
 #define GS_GIF_FUSED_VERIFY 0
-// Select a mutation so the verify check must fire: 1 = L2. 0 = none.
+// Select a mutation so the verify check must fire: 1 = L2, 2 = L1, 3 = L3. 0 = none.
 #define GS_GIF_FUSED_MUTATE 0
 
 #if GS_GIF_FUSED_VERIFY && !GS_GIF_FUSED_LAYOUTS
@@ -48,4 +48,25 @@ inline bool MatchPackedLayoutL2x3(u32 nreg, u32 r0, u32 r1, u32 r2)
 inline bool MatchPackedLayoutL3(u32 nreg, u32 r0, u32 r1, u32 r2)
 {
 	return nreg == 12 && r0 == 0x02050102 && r1 == 0x01020501 && r2 == 0x05020105;
+}
+
+// Packed A+D addresses that must not enter the L1 fused loop.
+inline bool FusedL1AddrAllowed(u8 addr)
+{
+	switch (addr)
+	{
+		case 0x01: // colour, would fight the loop's RGBA
+		case 0x02: // ST, would fight the loop's ST
+		case 0x03: // UV
+		case 0x04: // XYZF2 kick
+		case 0x05: // XYZ2 kick
+		case 0x0a: // FOG
+		case 0x0c: // XYZF3 kick
+		case 0x0d: // XYZ3 kick
+		case 0x53: // starts a transfer
+		case 0x54: // host write into local memory
+			return false;
+		default:
+			return true;
+	}
 }

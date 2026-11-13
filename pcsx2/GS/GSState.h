@@ -87,6 +87,12 @@ private:
 	typedef void (GSState::*GIFPackedRegHandlerFusedL2)(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
 	GIFPackedRegHandlerFusedL2 m_fpGIFPackedRegHandlerRGBASTXYZF2[8] = {};
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerRGBASTXYZF2(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
+	typedef void (GSState::*GIFPackedRegHandlerFusedL1)(const GIFPackedReg* RESTRICT r, u32 size);
+	GIFPackedRegHandlerFusedL1 m_fpGIFPackedRegHandlerADSTQRGBAXYZF2[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerADSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+	typedef void (GSState::*GIFPackedRegHandlerFusedL3)(const GIFPackedReg* RESTRICT r, u32 size);
+	GIFPackedRegHandlerFusedL3 m_fpGIFPackedRegHandlerSTQRGBAXYZ2x4[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2x4(const GIFPackedReg* RESTRICT r, u32 size);
 #endif
 
 	template<int i> void ApplyTEX0(GIFRegTEX0& TEX0);
@@ -268,11 +274,15 @@ protected:
 		u64 refused = 0;
 		u64 verify_a = 0;
 		u64 verify_ok = 0;
+		u64 verify_f = 0;
+		u64 verify_f_ok = 0;
 		u64 skip_flush = 0;
 		u64 skip_write = 0;
 		u64 skip_grow = 0;
 		u64 skip_move = 0;
 		u64 skip_partial = 0;
+		u64 l1_break_prim = 0;
+		u64 l1_refused_ad = 0;
 	};
 
 	struct FusedVerifySnap
@@ -305,7 +315,11 @@ protected:
 		GIFRegHandler reg_handlers[256] = {};
 #if GS_GIF_FUSED_LAYOUTS
 		GIFPackedRegHandlerFusedL2 l2_handlers[8] = {};
+		GIFPackedRegHandlerFusedL1 l1_handlers[8] = {};
+		GIFPackedRegHandlerFusedL3 l3_handlers[8] = {};
 #endif
+		u32 kicks = 0;
+		u32 flush_reason = 0;
 		GSDrawBufferEnv env_buffers[MAX_DRAW_BUFFERS] = {};
 		u32 v_head[MAX_DRAW_BUFFERS] = {};
 		u32 v_tail[MAX_DRAW_BUFFERS] = {};
@@ -321,13 +335,18 @@ protected:
 	FusedLayoutCounters m_fused_counters[3]{};
 	FusedVerifySnap m_fused_snap{};
 	FusedVerifySnap m_fused_post{};
+	FusedVerifySnap m_fused_flush{};
 	std::chrono::steady_clock::time_point m_fused_stats_last{};
 	int m_fused_verify_guard = 0;
+	int m_fused_verify_trial = 0;
 	u32 m_fused_verify_skip = 0;
+	u32 m_fused_trial_kicks = 0;
+	bool m_fused_flush_captured = false;
+	u64 m_fused_l1_addr[128]{};
 
 	void FusedVerifyCapture(FusedVerifySnap& s);
 	void FusedVerifyRestore(const FusedVerifySnap& s);
-	bool FusedVerifyCompare(const FusedVerifySnap& fused, const char* layout, u64 packet);
+	bool FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap& b, const char* layout, u64 packet);
 	void FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values);
 	void MaybePrintFusedStats();
 	void FusedVerifyNoteFlush()
@@ -351,7 +370,18 @@ protected:
 			m_fused_verify_skip |= 8u;
 	}
 #if GS_GIF_FUSED_LAYOUTS
+	void FusedVerifyPerQuadword(GIFPath& path, const u8* mem, u32 total);
+	bool FusedVerifyTakeSkip(FusedLayoutCounters& c);
+	void FusedVerifyMutate(FusedVerifySnap& s, int layout);
+	void FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int layout, const char* name);
+	void FusedVerifyRunL1(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL1 handler);
 	void FusedVerifyRunL2(GIFPath& path, const u8*& mem, u32 total, u32 pairs, GIFPackedRegHandlerFusedL2 handler);
+	void FusedVerifyRunL3(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL3 handler);
+	GIFPackedRegHandlerFusedL1 m_fused_run_l1 = nullptr;
+	GIFPackedRegHandlerFusedL2 m_fused_run_l2 = nullptr;
+	GIFPackedRegHandlerFusedL3 m_fused_run_l3 = nullptr;
+	u32 m_fused_run_pairs = 0;
+	int m_fused_run_layout = 0;
 #endif
 #endif
 

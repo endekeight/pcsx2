@@ -1147,6 +1147,8 @@ struct alignas(32) GIFPath
 #if GS_GIF_FUSED_LAYOUTS
 		, TYPE_RGBASTXYZF2x4
 		, TYPE_RGBASTXYZF2x3
+		, TYPE_ADSTQRGBAXYZF2
+		, TYPE_STQRGBAXYZ2x4
 #endif
 	};
 
@@ -1199,6 +1201,10 @@ struct alignas(32) GIFPath
 						// TODO: common types with UV instead
 						break;
 					case 4:
+#if GS_GIF_FUSED_LAYOUTS
+						if (MatchPackedLayoutL1(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_ADSTQRGBAXYZF2;
+#endif
 						break;
 					case 5:
 						break;
@@ -1237,6 +1243,10 @@ struct alignas(32) GIFPath
 							nreg = 3;
 							nloop *= 4;
 						}
+#if GS_GIF_FUSED_LAYOUTS
+						else if (MatchPackedLayoutL3(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_STQRGBAXYZ2x4;
+#endif
 						break;
 					case 13:
 						break;

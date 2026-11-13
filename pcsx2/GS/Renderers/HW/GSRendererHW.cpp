@@ -2399,6 +2399,13 @@ void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererHW::Move()
 {
+#if GS_GIF_FUSED_VERIFY
+	if (m_fused_verify_trial)
+	{
+		FusedVerifyNoteMove();
+		return;
+	}
+#endif
 	if (m_mv && m_mv(*this))
 	{
 #if GS_GIF_FUSED_VERIFY
