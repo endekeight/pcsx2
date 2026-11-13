@@ -2786,6 +2786,12 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 		pxFailRel("GSTCVERIFY mismatch");
 		std::abort();
 	};
+	auto fl_float_bits_eq = [](float a, float b) {
+		u32 ia, ib;
+		std::memcpy(&ia, &a, sizeof(ia));
+		std::memcpy(&ib, &b, sizeof(ib));
+		return ia == ib;
+	};
 	auto fl_verify = [&](Target* full) {
 		if (!fl_would_hit)
 			return;
@@ -2859,7 +2865,7 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 				fl_exp.m_unscaled_size.x, fl_exp.m_unscaled_size.y, full->m_unscaled_size.x, full->m_unscaled_size.y);
 			fl_fail("GSTCVERIFY: m_unscaled_size differed");
 		}
-		if (full->m_scale != fl_exp.m_scale)
+		if (!fl_float_bits_eq(full->m_scale, fl_exp.m_scale))
 		{
 			Console.WriteLn("GSTCVERIFY: m_scale differed: shortcut=%f full=%f", fl_exp.m_scale, full->m_scale);
 			fl_fail("GSTCVERIFY: m_scale differed");
@@ -2940,7 +2946,7 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 				static_cast<int>(fl_exp.m_is_frame), static_cast<int>(full->m_is_frame));
 			fl_fail("GSTCVERIFY: m_is_frame differed");
 		}
-		if (full->OffsetHack_modxy != fl_exp.OffsetHack_modxy)
+		if (!fl_float_bits_eq(full->OffsetHack_modxy, fl_exp.OffsetHack_modxy))
 		{
 			Console.WriteLn("GSTCVERIFY: OffsetHack_modxy differed: shortcut=%f full=%f",
 				fl_exp.OffsetHack_modxy, full->OffsetHack_modxy);
@@ -2986,11 +2992,18 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 				static_cast<unsigned long long>(full->m_dirty.size()));
 			fl_fail("GSTCVERIFY: m_dirty size differed");
 		}
-		if (!fl_dirty.empty() &&
-			memcmp(full->m_dirty.data(), fl_dirty.data(), fl_dirty.size() * sizeof(GSDirtyRect)) != 0)
+		for (size_t i = 0; i < fl_dirty.size(); i++)
 		{
-			Console.WriteLn("GSTCVERIFY: m_dirty contents differed");
-			fl_fail("GSTCVERIFY: m_dirty contents differed");
+			const GSDirtyRect& a = fl_dirty[i];
+			const GSDirtyRect& b = full->m_dirty[i];
+			if (!a.r.eq(b.r) || a.psm != b.psm || a.bw != b.bw || a.rgba._u32 != b.rgba._u32 || a.req_linear != b.req_linear)
+			{
+				Console.WriteLn("GSTCVERIFY: m_dirty[%llu] differed: shortcut r=(%d,%d,%d,%d) psm=%u bw=%u rgba=%08x req_linear=%d full r=(%d,%d,%d,%d) psm=%u bw=%u rgba=%08x req_linear=%d",
+					static_cast<unsigned long long>(i),
+					a.r.x, a.r.y, a.r.z, a.r.w, a.psm, a.bw, a.rgba._u32, static_cast<int>(a.req_linear),
+					b.r.x, b.r.y, b.r.z, b.r.w, b.psm, b.bw, b.rgba._u32, static_cast<int>(b.req_linear));
+				fl_fail("GSTCVERIFY: m_dirty contents differed");
+			}
 		}
 		if (!full->m_texture)
 		{
@@ -3010,7 +3023,7 @@ GSTextureCache::Target* GSTextureCache::LookupDrawTarget(GIFRegTEX0 TEX0, const 
 				fl_tex_clear_color, full->m_texture->GetClearColor());
 			fl_fail("GSTCVERIFY: texture clear color differed");
 		}
-		if (full->m_texture->GetClearDepth() != fl_tex_clear_depth)
+		if (!fl_float_bits_eq(full->m_texture->GetClearDepth(), fl_tex_clear_depth))
 		{
 			Console.WriteLn("GSTCVERIFY: texture clear depth differed: shortcut=%f full=%f",
 				fl_tex_clear_depth, full->m_texture->GetClearDepth());
