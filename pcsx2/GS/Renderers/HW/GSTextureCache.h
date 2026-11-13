@@ -26,7 +26,7 @@ class GSHwHack;
 // Also skip InvalidateVideoMem source walks when no source occupies the written pages.
 // Also reuse the last end-block of a target's valid rectangle when the inputs are unchanged.
 #ifndef GS_TC_FAST_LOOKUP
-#define GS_TC_FAST_LOOKUP 0
+#define GS_TC_FAST_LOOKUP 1
 #endif
 // Oracle that the front-target, no-source-under-write, and end-block shortcuts match the full paths.
 #ifndef GS_TC_FAST_LOOKUP_VERIFY
