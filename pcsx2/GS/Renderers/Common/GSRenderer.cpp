@@ -35,6 +35,10 @@
 #include <chrono>
 #endif
 
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
+#include "GS/Renderers/HW/GSTextureCache.h"
+#endif
+
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -620,6 +624,14 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_parse_stats.vsyncs = 0;
 		m_parse_stats.last = now;
 	}
+#endif
+#if GS_TC_LOOKUP_STATS
+	if (g_texture_cache)
+		g_texture_cache->PrintLookupStatsIfDue();
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY
+	if (g_texture_cache)
+		g_texture_cache->PrintFastLookupVerifyIfDue();
 #endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
 	{

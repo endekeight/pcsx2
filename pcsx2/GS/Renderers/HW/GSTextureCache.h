@@ -17,6 +17,43 @@ class GSHwHack;
 // disabling caching between draws.
 //#define DISABLE_HW_TEXTURE_CACHE
 
+// Count-only texture-cache lookup shortcut would-hits for the GSTCLOOKUP line.
+#ifndef GS_TC_LOOKUP_STATS
+#define GS_TC_LOOKUP_STATS 0
+#endif
+
+// Skip the draw-target walk when the list head is already the answer.
+// Also skip InvalidateVideoMem source walks when no source occupies the written pages.
+// Also reuse the last end-block of a target's valid rectangle when the inputs are unchanged.
+#ifndef GS_TC_FAST_LOOKUP
+#define GS_TC_FAST_LOOKUP 1
+#endif
+// Oracle that the front-target, no-source-under-write, and end-block shortcuts match the full paths.
+#ifndef GS_TC_FAST_LOOKUP_VERIFY
+#define GS_TC_FAST_LOOKUP_VERIFY 0
+#endif
+// Select one mutation so the verify check must fire: 1 = C1, 2 = C2, 3 = C3. 0 = none.
+#ifndef GS_TC_FAST_LOOKUP_MUTATE
+#define GS_TC_FAST_LOOKUP_MUTATE 0
+#endif
+
+#if GS_TC_FAST_LOOKUP_VERIFY && !GS_TC_FAST_LOOKUP
+#error GS_TC_FAST_LOOKUP_VERIFY requires GS_TC_FAST_LOOKUP
+#endif
+#if GS_TC_FAST_LOOKUP_MUTATE && !GS_TC_FAST_LOOKUP_VERIFY
+#error GS_TC_FAST_LOOKUP_MUTATE requires GS_TC_FAST_LOOKUP_VERIFY
+#endif
+#if GS_TC_FAST_LOOKUP_VERIFY && defined(NDEBUG)
+#error GS_TC_FAST_LOOKUP_VERIFY is not for a build with NDEBUG
+#endif
+#if GS_TC_FAST_LOOKUP_MUTATE && defined(NDEBUG)
+#error GS_TC_FAST_LOOKUP_MUTATE is not for a build with NDEBUG
+#endif
+
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
+#include <chrono>
+#endif
+
 class GSTextureCache
 {
 public:
@@ -252,6 +289,14 @@ public:
 		float OffsetHack_modxy = 0.0f;
 		GSDirtyRectList m_dirty;
 		GSVector4i m_valid{};
+#if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP
+		bool m_end_of_valid_known = false;
+		u32 m_end_of_valid_layout = 0;
+		GSVector4i m_end_of_valid_rect{};
+#if GS_TC_FAST_LOOKUP
+		u32 m_end_of_valid_block = 0;
+#endif
+#endif
 		GSVector4i m_drawn_since_read{};
 		int readbacks_since_draw = 0;
 
@@ -270,6 +315,9 @@ public:
 		void UpdateDrawn(const GSVector4i& rect, bool can_resize = true);
 		void ResizeValidity(const GSVector4i& rect);
 		void UpdateValidity(const GSVector4i& rect, bool can_resize = true);
+#if GS_TC_FAST_LOOKUP
+		u32 EndBlockOfValid();
+#endif
 
 		void ScaleRTAlpha();
 		void UnscaleRTAlpha();
@@ -376,6 +424,14 @@ public:
 	public:
 		std::unordered_set<Source*> m_surfaces;
 		std::array<FastList<Source*>, GS_MAX_PAGES> m_map;
+#if GS_TC_FAST_LOOKUP
+		std::array<u64, GS_MAX_PAGES / 64> m_page_used{};
+		static bool AnyPageUsed(const u64* bits, u32 start, u32 count);
+		bool AnyPageUsed(u32 start, u32 count) const
+		{
+			return AnyPageUsed(m_page_used.data(), start, count);
+		}
+#endif
 
 		void Add(Source* s, const GIFRegTEX0& TEX0);
 		void SwapTexture(GSTexture* old_tex, GSTexture* new_tex);
@@ -539,6 +595,12 @@ private:
 		const GSVector4i draw_rc = GSVector4i::zero(), bool is_shuffle = false, bool possible_clear = false,
 		bool preserve_scale = false, GSTextureCache::Source* src = nullptr, GSTextureCache::Target* ds = nullptr, int offset = -1);
 
+#if GS_TC_FAST_LOOKUP
+	Target* FrontDrawTarget(GIFRegTEX0 TEX0, float scale, int type, bool preserve_rgb, bool preserve_alpha,
+		const GSVector4i& draw_rect);
+	bool NoSourceUnderWrite(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
+#endif
+
 public:
 	Target* CreateTarget(GIFRegTEX0 TEX0, const GSVector2i& size, const GSVector2i& valid_size, float scale, int type, bool used = true,
 		u32 fbmask = 0, bool is_frame = false, bool preload = GSConfig.PreloadFrameWithGSData, bool preserve_target = true,
@@ -614,6 +676,73 @@ public:
 
 	/// Injects a texture into the hash cache, by using GSTexture::Swap(), transitively applying to all sources. Ownership of tex is transferred.
 	void InjectHashCacheTexture(const HashCacheKey& key, GSTexture* tex, const std::pair<u8, u8>& alpha_minmax);
+
+#if GS_TC_LOOKUP_STATS
+	enum LookupStatsSite : u32
+	{
+		LOOKUP_STATS_SITE_OTHER = 0,
+		LOOKUP_STATS_SITE_DRAW_RT = 1,
+		LOOKUP_STATS_SITE_DRAW_DS = 2,
+		LOOKUP_STATS_SITE_DRAW_IVM = 3,
+	};
+
+	struct LookupStats
+	{
+		u64 ldt = 0;
+		u64 ldt_rt = 0;
+		u64 ldt_ds = 0;
+		u64 ldt_other = 0;
+		u64 ldt_front = 0;
+		u64 ldt_walk_sum = 0;
+		u64 ldt_refuse_bp = 0;
+		u64 ldt_refuse_bw = 0;
+		u64 ldt_refuse_psm = 0;
+		u64 ldt_refuse_scale = 0;
+		u64 ldt_refuse_rgb = 0;
+		u64 ldt_refuse_ow = 0;
+		u64 ldt_empty = 0;
+		u64 ivm = 0;
+		u64 ivm_tf = 0;
+		u64 ivm_tt = 0;
+		u64 ivm_tf_draw = 0;
+		u64 ivm_tf_other = 0;
+		u64 ivm_tf_empty = 0;
+		u64 ivm_tf_pages_sum = 0;
+		u64 ivm_tf_src_sum = 0;
+		u64 ivm_type = 0;
+		u64 eov = 0;
+		u64 eov_uv = 0;
+		u64 eov_rv = 0;
+		u64 eov_same = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	LookupStats m_lookup_stats{};
+	u32 m_lookup_stats_site = LOOKUP_STATS_SITE_OTHER;
+	bool m_lookup_stats_ivm_tf = false;
+	u64 m_lookup_stats_tf_src_this = 0;
+
+	void PrintLookupStatsIfDue();
+#endif
+
+#if GS_TC_FAST_LOOKUP_VERIFY
+	u64 m_fl_hits = 0;
+	u64 m_fl_misses = 0;
+	u64 m_fl_verified = 0;
+	u64 m_ns_calls = 0;
+	u64 m_ns_early = 0;
+	u64 m_ns_verified = 0;
+	u64 m_ns_stale_occupied = 0;
+	u64 m_eb_calls = 0;
+	u64 m_eb_hits = 0;
+	u64 m_eb_verified = 0;
+	u32 m_ns_visited = 0;
+	bool m_ns_would_early = false;
+	std::chrono::steady_clock::time_point m_fl_last{};
+
+	void PrintFastLookupVerifyIfDue();
+	void VerifyNoSourceOccupancy(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
+#endif
 };
 
 extern std::unique_ptr<GSTextureCache> g_texture_cache;
