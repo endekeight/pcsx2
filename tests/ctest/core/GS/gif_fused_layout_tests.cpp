@@ -97,3 +97,22 @@ TEST(GifFusedLayout, L1AddrAllowed)
 	EXPECT_TRUE(FusedL1AddrAllowed(0x51));
 	EXPECT_TRUE(FusedL1AddrAllowed(0x52));
 }
+
+TEST(GifFusedLayout, L1AddrSkipState)
+{
+	EXPECT_FALSE(FusedL1AddrSkipState(0x00));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x01));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x02));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x03));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x0a));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x1c));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x06));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x07));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x16));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x17));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x04));
+	EXPECT_FALSE(FusedL1AddrSkipState(0x54));
+	EXPECT_TRUE(FusedL1AddrSkipState(0x60));
+	EXPECT_TRUE(FusedL1AddrSkipState(0x61));
+	EXPECT_TRUE(FusedL1AddrSkipState(0x62));
+}

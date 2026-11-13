@@ -281,6 +281,7 @@ protected:
 		u64 skip_grow = 0;
 		u64 skip_move = 0;
 		u64 skip_partial = 0;
+		u64 skip_state = 0;
 		u64 l1_break_prim = 0;
 		u64 l1_refused_ad = 0;
 	};
@@ -330,6 +331,9 @@ protected:
 		u32 i_tail[MAX_DRAW_BUFFERS] = {};
 		std::vector<GSVertex> vbuff[MAX_DRAW_BUFFERS];
 		std::vector<u16> ibuff[MAX_DRAW_BUFFERS];
+		GSClut::VerifyState clut = {};
+		bool channel_shuffle_finish = false;
+		bool trial_inval = false;
 	};
 
 	FusedLayoutCounters m_fused_counters[3]{};
@@ -342,6 +346,7 @@ protected:
 	u32 m_fused_verify_skip = 0;
 	u32 m_fused_trial_kicks = 0;
 	bool m_fused_flush_captured = false;
+	bool m_fused_trial_inval = false;
 	u64 m_fused_l1_addr[128]{};
 
 	void FusedVerifyCapture(FusedVerifySnap& s);
@@ -461,6 +466,14 @@ protected:
 	static void GetQuadRasterizedPoints(GSVector4& xy, GSVector4& tex, bool keep_order = true);
 
 public:
+#if GS_GIF_FUSED_VERIFY
+	void FusedVerifyNoteInval()
+	{
+		if (m_fused_verify_trial)
+			m_fused_trial_inval = true;
+	}
+	bool FusedVerifyIsTrial() const { return m_fused_verify_trial != 0; }
+#endif
 	enum EEGS_TransferType
 	{
 		EE_to_GS,

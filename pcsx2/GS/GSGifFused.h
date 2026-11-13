@@ -69,3 +69,20 @@ inline bool FusedL1AddrAllowed(u8 addr)
 			return true;
 	}
 }
+
+// Packed A+D addresses whose handlers write state a verify trial cannot restore.
+// SIGNAL/FINISH/LABEL may raise interrupts or touch privileged registers.
+// Packets that contain one of these are counted as skip_state and run live
+// without a dual trial.
+inline bool FusedL1AddrSkipState(u8 addr)
+{
+	switch (addr)
+	{
+		case 0x60: // SIGNAL
+		case 0x61: // FINISH
+		case 0x62: // LABEL
+			return true;
+		default:
+			return false;
+	}
+}

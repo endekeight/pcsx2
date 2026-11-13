@@ -5664,6 +5664,13 @@ void GSTextureCache::InvalidateVideoMem(const GSOffset& off, const GSVector4i& r
 // full_flush is set when it's a Local->Local stransfer and both src and destination are the same.
 void GSTextureCache::InvalidateLocalMem(const GSOffset& off, const GSVector4i& r, bool full_flush)
 {
+#if GS_GIF_FUSED_VERIFY
+	if (g_gs_renderer && g_gs_renderer->FusedVerifyIsTrial())
+	{
+		g_gs_renderer->FusedVerifyNoteInval();
+		return;
+	}
+#endif
 	const u32 bp = off.bp();
 	const u32 psm = off.psm();
 	[[maybe_unused]] const u32 bw = off.bw();

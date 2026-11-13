@@ -3746,6 +3746,9 @@ void GSState::FusedVerifyCapture(FusedVerifySnap& s)
 		else
 			s.ibuff[i].clear();
 	}
+	m_mem.m_clut.VerifySave(s.clut);
+	s.channel_shuffle_finish = m_channel_shuffle_finish;
+	s.trial_inval = m_fused_trial_inval;
 }
 
 void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
@@ -3810,6 +3813,8 @@ void GSState::FusedVerifyRestore(const FusedVerifySnap& s)
 	m_draw_env = &m_env;
 	PRIM = &m_env.PRIM;
 	m_context = const_cast<GSDrawingContext*>(&m_draw_env->CTXT[PRIM->CTXT]);
+	m_mem.m_clut.VerifyRestore(s.clut);
+	m_channel_shuffle_finish = s.channel_shuffle_finish;
 }
 
 void GSState::FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values)
@@ -3994,6 +3999,35 @@ bool GSState::FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap
 		FusedVerifyFail(layout, "m_recent_buffer_switch", packet, values);
 		return false;
 	}
+	if (a.clut.write_tex0.U64 != b.clut.write_tex0.U64 || a.clut.write_texclut.U64 != b.clut.write_texclut.U64 ||
+		a.clut.write_dirty != b.clut.write_dirty || a.clut.write_next_tex0 != b.clut.write_next_tex0)
+	{
+		FusedVerifyFail(layout, "clut_write", packet, "");
+		return false;
+	}
+	if (a.clut.cbp[0] != b.clut.cbp[0] || a.clut.cbp[1] != b.clut.cbp[1])
+	{
+		snprintf(values, sizeof(values), "a=%x,%x b=%x,%x", a.clut.cbp[0], a.clut.cbp[1], b.clut.cbp[0], b.clut.cbp[1]);
+		FusedVerifyFail(layout, "clut_cbp", packet, values);
+		return false;
+	}
+	if (a.clut.read_dirty != b.clut.read_dirty)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", static_cast<int>(a.clut.read_dirty), static_cast<int>(b.clut.read_dirty));
+		FusedVerifyFail(layout, "clut_read_dirty", packet, values);
+		return false;
+	}
+	if (memcmp(a.clut.clut, b.clut.clut, sizeof(a.clut.clut)) != 0)
+	{
+		FusedVerifyFail(layout, "clut", packet, "");
+		return false;
+	}
+	if (a.channel_shuffle_finish != b.channel_shuffle_finish)
+	{
+		snprintf(values, sizeof(values), "a=%d b=%d", static_cast<int>(a.channel_shuffle_finish), static_cast<int>(b.channel_shuffle_finish));
+		FusedVerifyFail(layout, "m_channel_shuffle_finish", packet, values);
+		return false;
+	}
 	return true;
 }
 
@@ -4014,7 +4048,7 @@ void GSState::MaybePrintFusedStats()
 		const FusedLayoutCounters& c = m_fused_counters[i];
 		if (i == 0)
 		{
-			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu l1_break_prim=%llu l1_refused_ad=%llu",
+			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu l1_break_prim=%llu l1_refused_ad=%llu",
 				names[i],
 				static_cast<unsigned long long>(c.seen),
 				static_cast<unsigned long long>(c.accepted),
@@ -4028,12 +4062,13 @@ void GSState::MaybePrintFusedStats()
 				static_cast<unsigned long long>(c.skip_grow),
 				static_cast<unsigned long long>(c.skip_move),
 				static_cast<unsigned long long>(c.skip_partial),
+				static_cast<unsigned long long>(c.skip_state),
 				static_cast<unsigned long long>(c.l1_break_prim),
 				static_cast<unsigned long long>(c.l1_refused_ad));
 		}
 		else
 		{
-			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu",
+			Console.WriteLn("GSFUSED: layout=%s seen=%llu accepted=%llu refused=%llu verify_a=%llu verify_ok=%llu verify_f=%llu verify_f_ok=%llu skip_flush=%llu skip_write=%llu skip_grow=%llu skip_move=%llu skip_partial=%llu skip_state=%llu",
 				names[i],
 				static_cast<unsigned long long>(c.seen),
 				static_cast<unsigned long long>(c.accepted),
@@ -4046,7 +4081,8 @@ void GSState::MaybePrintFusedStats()
 				static_cast<unsigned long long>(c.skip_write),
 				static_cast<unsigned long long>(c.skip_grow),
 				static_cast<unsigned long long>(c.skip_move),
-				static_cast<unsigned long long>(c.skip_partial));
+				static_cast<unsigned long long>(c.skip_partial),
+				static_cast<unsigned long long>(c.skip_state));
 		}
 	}
 	{
@@ -4131,9 +4167,25 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	FusedLayoutCounters& c = m_fused_counters[layout];
 	const GIFPackedReg* r = reinterpret_cast<const GIFPackedReg*>(mem);
 
+	if (layout == 0)
+	{
+		for (u32 i = 0; i < total; i += 4)
+		{
+			if (FusedL1AddrSkipState(r[i].A_D.ADDR & 0x7F))
+			{
+				c.accepted++;
+				c.skip_state++;
+				(this->*m_fused_run_l1)(r, total);
+				mem += total * sizeof(GIFPackedReg);
+				return;
+			}
+		}
+	}
+
 	m_fused_verify_skip = 0;
 	m_fused_flush_captured = false;
 	m_fused_trial_kicks = 0;
+	m_fused_trial_inval = false;
 	FusedVerifyCapture(m_fused_snap);
 
 	m_fused_verify_guard = 1;
@@ -4161,6 +4213,7 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	}
 
 	const bool fused_flushed = m_fused_flush_captured;
+	const bool fused_inval = m_fused_trial_inval;
 	FusedVerifySnap fused_flush = m_fused_flush;
 	FusedVerifyCapture(m_fused_post);
 
@@ -4168,6 +4221,7 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	m_fused_verify_skip = 0;
 	m_fused_flush_captured = false;
 	m_fused_trial_kicks = 0;
+	m_fused_trial_inval = false;
 	m_fused_verify_guard = 1;
 	m_fused_verify_trial = 1;
 	FusedVerifyPerQuadword(path, mem, total);
@@ -4187,9 +4241,38 @@ void GSState::FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int l
 	}
 
 	const bool old_flushed = m_fused_flush_captured;
+	if (fused_inval != m_fused_trial_inval)
+	{
+		char inval_values[32];
+		snprintf(inval_values, sizeof(inval_values), "a=%d b=%d", static_cast<int>(fused_inval), static_cast<int>(m_fused_trial_inval));
+		FusedVerifyFail(name, "trial_inval", c.seen, inval_values);
+		return;
+	}
 	if (fused_flushed != old_flushed)
 	{
-		FusedVerifyFail(name, "flushed", c.seen, "");
+		char adbuf[80];
+		adbuf[0] = '\0';
+		if (layout == 0)
+		{
+			int pos = 0;
+			u32 n = 0;
+			for (u32 i = 0; i < total && n < 8; i += 4, n++)
+			{
+				if (pos < 0 || pos >= static_cast<int>(sizeof(adbuf)))
+					break;
+				const int w = snprintf(adbuf + pos, sizeof(adbuf) - static_cast<size_t>(pos), n ? ",%02x" : "%02x",
+					r[i].A_D.ADDR & 0x7F);
+				if (w < 0)
+					break;
+				pos += w;
+			}
+		}
+		const char* which = fused_flushed ? "fused" : "quadword";
+		const FusedVerifySnap& fs = fused_flushed ? fused_flush : m_fused_flush;
+		char values[192];
+		snprintf(values, sizeof(values), "trial=%s kicks=%u reason=%u ad=%s",
+			which, fs.kicks, fs.flush_reason, adbuf);
+		FusedVerifyFail(name, "flushed", c.seen, values);
 		return;
 	}
 
