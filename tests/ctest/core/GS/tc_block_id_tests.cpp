@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -80,38 +81,82 @@ namespace
 		}
 	}
 
-	void CheckHashBytesSize(size_t size)
+	u64 FeedStream(const u8* data, size_t size, size_t chunk)
 	{
-		alignas(16) u8 storage_a[1024 + 64];
-		alignas(16) u8 storage_b[1024 + 64];
-		u8* p = storage_a + 1;
-		u8* q = storage_b + 1;
-		for (size_t i = 0; i < size + 1; i++)
-			p[i] = static_cast<u8>(i * 13u + 7u);
-		std::memcpy(q, p, size + 1);
-
-		EXPECT_EQ(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(q, size));
-		EXPECT_EQ(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(p, size));
-
-		if (size > 0)
+		GSBlockId::Stream st;
+		st.Reset();
+		if (size == 0)
+			return st.Finish();
+		if (chunk == 0 || chunk >= size)
 		{
-			q[0] = static_cast<u8>(p[0] ^ 0xFF);
-			EXPECT_NE(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(q, size));
-			q[0] = p[0];
-			q[size - 1] = static_cast<u8>(p[size - 1] ^ 0xFF);
-			EXPECT_NE(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(q, size));
-			q[size - 1] = p[size - 1];
-			if (size >= 3)
-			{
-				const size_t mid = size / 2;
-				q[mid] = static_cast<u8>(p[mid] ^ 0xFF);
-				EXPECT_NE(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(q, size));
-				q[mid] = p[mid];
-			}
+			st.Add(data, size);
+			return st.Finish();
 		}
+		size_t off = 0;
+		while (off < size)
+		{
+			size_t n = chunk;
+			if (n > size - off)
+				n = size - off;
+			st.Add(data + off, n);
+			off += n;
+		}
+		return st.Finish();
+	}
 
-		q[size] = 0;
-		EXPECT_NE(GSBlockId::HashBytes(p, size), GSBlockId::HashBytes(q, size + 1));
+	void FillPattern(u8* p, size_t size)
+	{
+		for (size_t i = 0; i < size; i++)
+			p[i] = static_cast<u8>(i * 13u + 7u);
+	}
+
+	void CheckStreamSize(size_t size)
+	{
+		std::vector<u8> storage_a(size + 64);
+		std::vector<u8> storage_b(size + 64);
+		u8* aligned = storage_a.data();
+		aligned += (16u - (reinterpret_cast<uintptr_t>(aligned) & 15u)) & 15u;
+		u8* unaligned = storage_b.data();
+		if ((reinterpret_cast<uintptr_t>(unaligned) & 15u) == 0)
+			unaligned += 1;
+
+		FillPattern(aligned, size);
+		if (size != 0)
+			std::memcpy(unaligned, aligned, size);
+
+		const size_t chunks[] = {0, 1, 7, 30, 255, 256, 257};
+		const u64 expected = FeedStream(aligned, size, 0);
+		EXPECT_EQ(expected, FeedStream(aligned, size, 0));
+		for (size_t chunk : chunks)
+			EXPECT_EQ(expected, FeedStream(aligned, size, chunk)) << "size " << size << " chunk " << chunk;
+		if (size != 0)
+		{
+			for (size_t chunk : chunks)
+				EXPECT_EQ(expected, FeedStream(unaligned, size, chunk)) << "size " << size << " unaligned chunk " << chunk;
+
+			const size_t positions[] = {0, size / 2, size - 1};
+			std::vector<u8> flipped(size);
+			for (size_t pos : positions)
+			{
+				std::memcpy(flipped.data(), aligned, size);
+				flipped[pos] = static_cast<u8>(aligned[pos] ^ 0xFF);
+				EXPECT_NE(expected, FeedStream(flipped.data(), size, 0)) << "size " << size << " pos " << pos;
+			}
+			if (size <= 257)
+			{
+				for (size_t pos = 0; pos < size; pos++)
+				{
+					std::memcpy(flipped.data(), aligned, size);
+					flipped[pos] = static_cast<u8>(aligned[pos] ^ 0xFF);
+					EXPECT_NE(expected, FeedStream(flipped.data(), size, 0)) << "size " << size << " pos " << pos;
+				}
+			}
+
+			std::vector<u8> plus_zero(size + 1);
+			std::memcpy(plus_zero.data(), aligned, size);
+			plus_zero[size] = 0;
+			EXPECT_NE(expected, FeedStream(plus_zero.data(), size + 1, 0)) << "size " << size;
+		}
 	}
 } // namespace
 
@@ -137,11 +182,24 @@ TEST(GSBlockId, HashCRC)
 }
 #endif
 
-TEST(GSBlockId, HashBytesSizes)
+TEST(GSBlockId, StreamCutsAndAlignment)
 {
-	const size_t sizes[] = {0, 1, 15, 16, 255, 256, 257, 511, 1024};
+	const size_t sizes[] = {0, 1, 255, 256, 257, 512, 100, 100000};
 	for (size_t size : sizes)
-		CheckHashBytesSize(size);
+		CheckStreamSize(size);
+}
+
+TEST(GSBlockId, StreamEmptyStable)
+{
+	GSBlockId::Stream a;
+	a.Reset();
+	const u64 empty = a.Finish();
+	GSBlockId::Stream b;
+	b.Reset();
+	EXPECT_EQ(empty, b.Finish());
+	GSBlockId::Stream c;
+	c.Reset();
+	EXPECT_EQ(empty, c.Finish());
 }
 
 TEST(GSBlockId, CombineSensitive)

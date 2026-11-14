@@ -87,6 +87,10 @@ class GSHwHack;
 #if GS_TC_HASH_STATS
 #include <chrono>
 #endif
+#if GS_TC_BLOCK_ID_VERIFY
+#include <chrono>
+#include <unordered_map>
+#endif
 
 class GSTextureCache
 {
@@ -180,7 +184,11 @@ public:
 
 		HashCacheKey();
 
-		static HashCacheKey Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region);
+		static HashCacheKey Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region
+#if GS_TC_BLOCK_ID
+			, bool in_run
+#endif
+		);
 
 		HashCacheKey WithRemovedCLUTHash() const;
 		void RemoveCLUTHash();
@@ -204,6 +212,9 @@ public:
 		std::pair<u8, u8> alpha_minmax;
 		bool valid_alpha_minmax;
 		bool is_replacement;
+#if GS_TC_BLOCK_ID_VERIFY
+		HashType verify_xxh3 = 0;
+#endif
 	};
 
 	using HashCacheMap = std::unordered_map<HashCacheKey, HashCacheEntry, HashCacheKeyHash>;
@@ -806,6 +817,19 @@ public:
 
 	void PrintFastLookupVerifyIfDue();
 	void VerifyNoSourceOccupancy(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
+#endif
+
+#if GS_TC_BLOCK_ID_VERIFY
+	u64 m_block_id_keys_inrun = 0;
+	u64 m_block_id_keys_leave = 0;
+	u64 m_block_id_hits_checked = 0;
+	u64 m_block_id_inserts_checked = 0;
+	u64 m_block_id_stream_bytes = 0;
+	u64 m_block_id_preload_levels = 0;
+	std::unordered_map<HashCacheKey, HashCacheKey, HashCacheKeyHash> m_block_id_old_to_new;
+	std::chrono::steady_clock::time_point m_block_id_last{};
+
+	void PrintBlockIdVerifyIfDue();
 #endif
 };
 

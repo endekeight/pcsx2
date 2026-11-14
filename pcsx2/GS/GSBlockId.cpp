@@ -30,41 +30,11 @@ namespace GSBlockId
 {
 	static_assert(GS_BLOCK_SIZE == 256u);
 
-	static u64 Mix64(u64 x)
-	{
-		x ^= x >> 33;
-		x *= 0xff51afd7ed558ccdULL;
-		x ^= x >> 33;
-		x *= 0xc4ceb9fe1a85ec53ULL;
-		x ^= x >> 33;
-		return x;
-	}
-
-	u64 Combine(u64 acc, u64 id)
-	{
-		return Mix64(acc ^ Mix64(id + 0x9E3779B97F4A7C15ULL));
-	}
-
 	u64 HashPortable(const u8* block)
 	{
 		// XXH3_64bits is the algorithm behind GSXXH3_64bits. The wrapper's long
 		// path needs MultiISAFunctions, which the host test binary does not link.
 		return XXH3_64bits(block, GS_BLOCK_SIZE);
-	}
-
-	static u64 HashBytesPortable(const u8* data, size_t size)
-	{
-		u64 acc = kCombineInit;
-		const u64 n = size;
-		while (size >= GS_BLOCK_SIZE)
-		{
-			acc = Combine(acc, XXH3_64bits(data, GS_BLOCK_SIZE));
-			data += GS_BLOCK_SIZE;
-			size -= GS_BLOCK_SIZE;
-		}
-		if (size != 0)
-			acc = Combine(acc, XXH3_64bits(data, size));
-		return Combine(acc, n);
 	}
 
 #if defined(ARCH_ARM64)
@@ -119,26 +89,6 @@ namespace GSBlockId
 		return Mix64(lo + hi * 0x9E3779B97F4A7C15ULL);
 	}
 
-	GS_BLOCK_ID_TARGET_AES
-	static u64 HashBytesAES(const u8* data, size_t size)
-	{
-		u64 acc = kCombineInit;
-		const u64 n = size;
-		while (size >= GS_BLOCK_SIZE)
-		{
-			acc = Combine(acc, HashAES(data));
-			data += GS_BLOCK_SIZE;
-			size -= GS_BLOCK_SIZE;
-		}
-		if (size != 0)
-		{
-			alignas(16) u8 tail[GS_BLOCK_SIZE] = {};
-			std::memcpy(tail, data, size);
-			acc = Combine(acc, HashAES(tail));
-		}
-		return Combine(acc, n);
-	}
-
 	GS_BLOCK_ID_TARGET_CRC
 	u64 HashCRC(const u8* block)
 	{
@@ -151,26 +101,6 @@ namespace GSBlockId
 			c1 = __crc32cd(c1, LoadU64(block + i + 8));
 		}
 		return Mix64((u64{c0} << 32) | c1);
-	}
-
-	GS_BLOCK_ID_TARGET_CRC
-	static u64 HashBytesCRC(const u8* data, size_t size)
-	{
-		u64 acc = kCombineInit;
-		const u64 n = size;
-		while (size >= GS_BLOCK_SIZE)
-		{
-			acc = Combine(acc, HashCRC(data));
-			data += GS_BLOCK_SIZE;
-			size -= GS_BLOCK_SIZE;
-		}
-		if (size != 0)
-		{
-			alignas(16) u8 tail[GS_BLOCK_SIZE] = {};
-			std::memcpy(tail, data, size);
-			acc = Combine(acc, HashCRC(tail));
-		}
-		return Combine(acc, n);
 	}
 
 	static bool CpuHasAES()
@@ -204,14 +134,13 @@ namespace GSBlockId
 	struct Ops
 	{
 		u64 (*hash)(const u8*);
-		u64 (*hash_bytes)(const u8*, size_t);
 		const char* name;
 	};
 
-	static const Ops kPortableOps = {HashPortable, HashBytesPortable, "portable"};
+	static const Ops kPortableOps = {HashPortable, "portable"};
 #if defined(ARCH_ARM64)
-	static const Ops kAESOps = {HashAES, HashBytesAES, "aes"};
-	static const Ops kCRCOps = {HashCRC, HashBytesCRC, "crc"};
+	static const Ops kAESOps = {HashAES, "aes"};
+	static const Ops kCRCOps = {HashCRC, "crc"};
 #endif
 
 	static const Ops& Selected()
@@ -231,11 +160,6 @@ namespace GSBlockId
 	u64 Hash(const u8* block)
 	{
 		return Selected().hash(block);
-	}
-
-	u64 HashBytes(const u8* data, size_t size)
-	{
-		return Selected().hash_bytes(data, size);
 	}
 
 	const char* ImplName()

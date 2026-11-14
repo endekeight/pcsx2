@@ -29,6 +29,12 @@
 #if GS_TC_HASH_STATS
 #include <cstring>
 #endif
+#if GS_TC_BLOCK_ID
+#include "GS/GSBlockId.h"
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+#include <cstdlib>
+#endif
 
 #ifdef __APPLE__
 #include <stdlib.h>
@@ -45,6 +51,12 @@ static u64 s_hash_pal16 = 0;
 static u64 s_hash_pal256 = 0;
 static u32 s_lp_prev_clut[256] = {};
 static u16 s_lp_prev_pal = 0;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+static GSTextureCache::HashType s_block_id_last_xxh3 = 0;
+#endif
+#if GS_TC_BLOCK_ID_MUTATE == 1
+static u64 s_gstcbid_frame = 0;
 #endif
 
 /// List of candidates for purging when the hash cache gets too large.
@@ -2534,6 +2546,30 @@ void GSTextureCache::PrintHashStatsIfDue()
 		static_cast<unsigned long long>(m_hash_stats.lp_same),
 		static_cast<unsigned long long>(m_hash_stats.create_source));
 	m_hash_stats.last = now;
+}
+#endif
+
+#if GS_TC_BLOCK_ID_VERIFY
+void GSTextureCache::PrintBlockIdVerifyIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_block_id_last == std::chrono::steady_clock::time_point{})
+	{
+		m_block_id_last = now;
+		return;
+	}
+	if (now - m_block_id_last < std::chrono::seconds(1))
+		return;
+
+	Console.WriteLn("GSTCBID: impl=%s keys_inrun=%llu keys_leave=%llu hits_checked=%llu inserts_checked=%llu stream_bytes=%llu preload_levels=%llu",
+		GSBlockId::ImplName(),
+		static_cast<unsigned long long>(m_block_id_keys_inrun),
+		static_cast<unsigned long long>(m_block_id_keys_leave),
+		static_cast<unsigned long long>(m_block_id_hits_checked),
+		static_cast<unsigned long long>(m_block_id_inserts_checked),
+		static_cast<unsigned long long>(m_block_id_stream_bytes),
+		static_cast<unsigned long long>(m_block_id_preload_levels));
+	m_block_id_last = now;
 }
 #endif
 
@@ -6797,6 +6833,12 @@ void GSTextureCache::IncAge()
 #if GS_TC_HASH_STATS
 	PrintHashStatsIfDue();
 #endif
+#if GS_TC_BLOCK_ID_VERIFY
+	PrintBlockIdVerifyIfDue();
+#endif
+#if GS_TC_BLOCK_ID_MUTATE == 1
+	s_gstcbid_frame++;
+#endif
 	static constexpr int max_age = 3;
 	static constexpr int max_preload_age = 30;
 
@@ -7817,13 +7859,53 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	if (!dump && !replace && !can_cache)
 		return nullptr;
 
+#if GS_TC_BLOCK_ID
+	const bool in_run = !dump && !replace;
+#endif
 	// need the hash either for replacing, dumping or caching.
 	// if dumping/replacing is on, we compute the clut hash regardless, since replacements aren't indexed
-	HashCacheKey key{HashCacheKey::Create(TEX0, TEXA, (dump || replace || !paltex) ? clut : nullptr, lod, region)};
+	HashCacheKey key{HashCacheKey::Create(TEX0, TEXA, (dump || replace || !paltex) ? clut : nullptr, lod, region
+#if GS_TC_BLOCK_ID
+		, in_run
+#endif
+	)};
 #if GS_TC_HASH_STATS
 	m_hash_stats.keys++;
 	if ((dump || replace || !paltex) && clut)
 		m_hash_stats.keys_clut++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	auto bid_fail = [](const char*) {
+		pxFailRel("GSTCBID mismatch");
+		std::abort();
+	};
+	auto bid_check_hit = [&](HashCacheEntry* entry) {
+		if (!in_run)
+			return;
+		m_block_id_hits_checked++;
+		if (entry->verify_xxh3 != s_block_id_last_xxh3)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=two_old_one_new old=%" PRIx64 " new=%" PRIx64,
+				entry->verify_xxh3, s_block_id_last_xxh3);
+			bid_fail("GSTCBID: mismatch kind=two_old_one_new");
+		}
+	};
+	auto bid_check_insert = [&](const HashCacheKey& ins) {
+		if (!in_run)
+			return;
+		m_block_id_inserts_checked++;
+		HashCacheKey old_key = ins;
+		old_key.TEX0Hash = s_block_id_last_xxh3;
+		old_key.TEX0.U64 &= ~1ULL;
+		auto found = m_block_id_old_to_new.find(old_key);
+		if (found != m_block_id_old_to_new.end() && found->second != ins)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=one_old_two_new old=%" PRIx64 " new=%" PRIx64,
+				found->second.TEX0Hash, ins.TEX0Hash);
+			bid_fail("GSTCBID: mismatch kind=one_old_two_new");
+		}
+		m_block_id_old_to_new[old_key] = ins;
+	};
 #endif
 
 	// handle dumping first, this is mostly isolated.
@@ -7863,6 +7945,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 		entry->refcount++;
 #if GS_TC_HASH_STATS
 		m_hash_stats.hc_hit++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+		bid_check_hit(entry);
 #endif
 		return entry;
 	}
@@ -7978,6 +8063,15 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	m_hash_cache_memory_usage += tex->GetMemUsage();
 #if GS_TC_HASH_STATS
 	m_hash_stats.hc_miss++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	if (in_run)
+	{
+		bid_check_insert(key);
+		HashCacheEntry* added = &m_hash_cache.emplace(key, entry).first->second;
+		added->verify_xxh3 = s_block_id_last_xxh3;
+		return added;
+	}
 #endif
 	return &m_hash_cache.emplace(key, entry).first->second;
 }
@@ -9937,26 +10031,94 @@ GSTextureCache::SourceRegion GSTextureCache::SourceRegion::Create(GIFRegTEX0 TEX
 	return region;
 }
 
+#if GS_TC_BLOCK_ID
+struct BlockHashState
+{
+	XXH3_state_t xxh;
+	GSBlockId::Stream stream;
+	bool in_run;
+#if GS_TC_BLOCK_ID_VERIFY
+	GSTextureCache::HashType xxh3_digest;
+#endif
+};
+#else
 using BlockHashState = XXH3_state_t;
+#endif
 
 __fi static void BlockHashReset(BlockHashState& st)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+		st.stream.Reset();
+#if GS_TC_BLOCK_ID_VERIFY
+	XXH3_64bits_reset(&st.xxh);
+#else
+	if (!st.in_run)
+		XXH3_64bits_reset(&st.xxh);
+#endif
+#else
 	XXH3_64bits_reset(&st);
+#endif
 }
 
 __fi static void BlockHashAccumulate(BlockHashState& st, const u8* bp)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+		st.stream.Add(bp, GS_BLOCK_SIZE);
+#if GS_TC_BLOCK_ID_VERIFY
+		GSXXH3_64bits_update(&st.xxh, bp, GS_BLOCK_SIZE);
+		g_texture_cache->m_block_id_stream_bytes += GS_BLOCK_SIZE;
+#endif
+	}
+	else
+	{
+		GSXXH3_64bits_update(&st.xxh, bp, GS_BLOCK_SIZE);
+	}
+#else
 	GSXXH3_64bits_update(&st, bp, GS_BLOCK_SIZE);
+#endif
 }
 
 __fi static void BlockHashAccumulate(BlockHashState& st, const u8* bp, u32 size)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+		st.stream.Add(bp, size);
+#if GS_TC_BLOCK_ID_VERIFY
+		GSXXH3_64bits_update(&st.xxh, bp, size);
+		g_texture_cache->m_block_id_stream_bytes += size;
+#endif
+	}
+	else
+	{
+		GSXXH3_64bits_update(&st.xxh, bp, size);
+	}
+#else
 	GSXXH3_64bits_update(&st, bp, size);
+#endif
 }
 
 __fi static GSTextureCache::HashType FinishBlockHash(BlockHashState& st)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		st.xxh3_digest = GSXXH3_64bits_digest(&st.xxh);
+#endif
+		GSTextureCache::HashType h = st.stream.Finish();
+#if GS_TC_BLOCK_ID_MUTATE == 1
+		h ^= (s_gstcbid_frame & 1ull);
+#endif
+		return h;
+	}
+	return GSXXH3_64bits_digest(&st.xxh);
+#else
 	return GSXXH3_64bits_digest(&st);
+#endif
 }
 
 static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GSTextureCache::SourceRegion region, BlockHashState& hash_st, u8* temp)
@@ -10041,8 +10203,14 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 GSTextureCache::HashType GSTextureCache::HashTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region)
 {
 	BlockHashState hash_st;
+#if GS_TC_BLOCK_ID
+	hash_st.in_run = true; // needs proper testing
+#endif
 	BlockHashReset(hash_st);
 	HashTextureLevel(TEX0, TEXA, region, hash_st, s_unswizzle_buffer);
+#if GS_TC_BLOCK_ID_VERIFY
+	g_texture_cache->m_block_id_preload_levels++;
+#endif
 	return FinishBlockHash(hash_st);
 }
 
@@ -10107,7 +10275,11 @@ GSTextureCache::HashCacheKey::HashCacheKey()
 	TEXA.U64 = 0;
 }
 
-GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region)
+GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region
+#if GS_TC_BLOCK_ID
+	, bool in_run
+#endif
+)
 {
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 
@@ -10119,6 +10291,9 @@ GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTE
 	ret.region_height = static_cast<u16>(region.GetHeight());
 
 	BlockHashState hash_st;
+#if GS_TC_BLOCK_ID
+	hash_st.in_run = in_run; // needs proper testing
+#endif
 	BlockHashReset(hash_st);
 
 	// base level is always hashed
@@ -10137,6 +10312,16 @@ GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTE
 	}
 
 	ret.TEX0Hash = FinishBlockHash(hash_st);
+#if GS_TC_BLOCK_ID
+	if (in_run)
+		ret.TEX0.U64 |= 1ULL;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	if (in_run)
+		s_block_id_last_xxh3 = hash_st.xxh3_digest;
+	g_texture_cache->m_block_id_keys_inrun += in_run ? 1 : 0;
+	g_texture_cache->m_block_id_keys_leave += in_run ? 0 : 1;
+#endif
 
 	return ret;
 }
