@@ -7,6 +7,7 @@
 #include "GSVector.h"
 #include "GSTables.h"
 #include "GSAlignedClass.h"
+#include "GSBlockIdFlags.h"
 
 class GSLocalMemory;
 class GSTexture;
@@ -25,6 +26,9 @@ class alignas(32) GSClut final : public GSAlignedClass<32>
 	u16* m_clut = nullptr;
 	u32* m_buff32 = nullptr;
 	u64* m_buff64 = nullptr;
+#if GS_TC_BLOCK_ID
+	u32 m_read_serial = 0;
+#endif
 
 	struct alignas(32) WriteState
 	{
@@ -142,4 +146,8 @@ public:
 
 	operator const u32*() const { return m_buff32; }
 	operator const u64*() const { return m_buff64; }
+#if GS_TC_BLOCK_ID
+	u32 GetReadSerial() const { return m_read_serial; }
+	const u32* GetBuff32() const { return m_buff32; }
+#endif
 };

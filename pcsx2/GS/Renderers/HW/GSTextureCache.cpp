@@ -25,7 +25,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-#endif>
+#endif
+#if GS_TC_HASH_STATS
+#include <cstring>
+#endif
+#if GS_TC_BLOCK_ID
+#include "GS/GSBlockId.h"
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+#include <cstdlib>
+#endif
 
 #ifdef __APPLE__
 #include <stdlib.h>
@@ -36,6 +45,19 @@
 std::unique_ptr<GSTextureCache> g_texture_cache;
 
 static u8* s_unswizzle_buffer;
+
+#if GS_TC_HASH_STATS
+static u64 s_hash_pal16 = 0;
+static u64 s_hash_pal256 = 0;
+static u32 s_lp_prev_clut[256] = {};
+static u16 s_lp_prev_pal = 0;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+static GSTextureCache::HashType s_block_id_last_xxh3 = 0;
+#endif
+#if GS_TC_BLOCK_ID_MUTATE == 1
+static u64 s_gstcbid_frame = 0;
+#endif
 
 /// List of candidates for purging when the hash cache gets too large.
 static std::vector<std::pair<GSTextureCache::HashCacheMap::iterator, s32>> s_hash_cache_purge_list;
@@ -116,8 +138,25 @@ void GSTextureCache::RemoveAll(bool sources, bool targets, bool hash_cache)
 		m_hash_cache.clear();
 		m_hash_cache_memory_usage = 0;
 		m_hash_cache_replacement_memory_usage = 0;
+#if GS_TC_BLOCK_ID
+		ClearPaletteMemo();
+#if GS_TC_BLOCK_ID_VERIFY
+		m_block_id_old_to_new.clear();
+#endif
+#endif
 	}
 }
+
+#if GS_TC_BLOCK_ID
+void GSTextureCache::ClearPaletteMemo()
+{
+	m_pal_memo_clut = nullptr;
+	m_pal_memo_serial = 0;
+	m_pal_memo_pal = 0;
+	m_pal_memo_hash = 0;
+	m_pal_memo_palette.reset();
+}
+#endif
 
 bool GSTextureCache::FullRectDirty(Target* target, u32 rgba_mask)
 {
@@ -2483,6 +2522,74 @@ void GSTextureCache::PrintLookupStatsIfDue()
 		static_cast<unsigned long long>(m_lookup_stats.eov_same));
 	m_lookup_stats = {};
 	m_lookup_stats.last = now;
+}
+#endif
+
+#if GS_TC_HASH_STATS
+void GSTextureCache::PrintHashStatsIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_hash_stats.last == std::chrono::steady_clock::time_point{})
+	{
+		m_hash_stats.last = now;
+		return;
+	}
+	if (now - m_hash_stats.last < std::chrono::seconds(1))
+		return;
+
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_hash_stats.last).count();
+	Console.WriteLn("GSTCHASH: ms=%lld lhc_calls=%llu lhc_early=%llu lhc_dump=%llu lhc_replace=%llu keys=%llu keys_clut=%llu hc_hit=%llu hc_miss=%llu hc_null=%llu levels=%llu blocks=%llu partials=%llu partial_bytes=%llu bytes=%llu",
+		static_cast<long long>(ms),
+		static_cast<unsigned long long>(m_hash_stats.lhc_calls),
+		static_cast<unsigned long long>(m_hash_stats.lhc_early),
+		static_cast<unsigned long long>(m_hash_stats.lhc_dump),
+		static_cast<unsigned long long>(m_hash_stats.lhc_replace),
+		static_cast<unsigned long long>(m_hash_stats.keys),
+		static_cast<unsigned long long>(m_hash_stats.keys_clut),
+		static_cast<unsigned long long>(m_hash_stats.hc_hit),
+		static_cast<unsigned long long>(m_hash_stats.hc_miss),
+		static_cast<unsigned long long>(m_hash_stats.hc_null),
+		static_cast<unsigned long long>(m_hash_stats.levels),
+		static_cast<unsigned long long>(m_hash_stats.blocks),
+		static_cast<unsigned long long>(m_hash_stats.partials),
+		static_cast<unsigned long long>(m_hash_stats.partial_bytes),
+		static_cast<unsigned long long>(m_hash_stats.bytes));
+	Console.WriteLn("GSTCHASH: pal16=%llu pal256=%llu lp_calls=%llu lp_hit=%llu lp_miss=%llu lp_same=%llu create_source=%llu",
+		static_cast<unsigned long long>(s_hash_pal16),
+		static_cast<unsigned long long>(s_hash_pal256),
+		static_cast<unsigned long long>(m_hash_stats.lp_calls),
+		static_cast<unsigned long long>(m_hash_stats.lp_hit),
+		static_cast<unsigned long long>(m_hash_stats.lp_miss),
+		static_cast<unsigned long long>(m_hash_stats.lp_same),
+		static_cast<unsigned long long>(m_hash_stats.create_source));
+	m_hash_stats.last = now;
+}
+#endif
+
+#if GS_TC_BLOCK_ID_VERIFY
+void GSTextureCache::PrintBlockIdVerifyIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_block_id_last == std::chrono::steady_clock::time_point{})
+	{
+		m_block_id_last = now;
+		return;
+	}
+	if (now - m_block_id_last < std::chrono::seconds(1))
+		return;
+
+	Console.WriteLn("GSTCBID: impl=%s keys_inrun=%llu keys_leave=%llu hits_checked=%llu inserts_checked=%llu stream_bytes=%llu preload_levels=%llu pal_memo_hit=%llu pal_memo_miss=%llu pal_other_ptr=%llu",
+		GSBlockId::ImplName(),
+		static_cast<unsigned long long>(m_block_id_keys_inrun),
+		static_cast<unsigned long long>(m_block_id_keys_leave),
+		static_cast<unsigned long long>(m_block_id_hits_checked),
+		static_cast<unsigned long long>(m_block_id_inserts_checked),
+		static_cast<unsigned long long>(m_block_id_stream_bytes),
+		static_cast<unsigned long long>(m_block_id_preload_levels),
+		static_cast<unsigned long long>(m_block_id_pal_memo_hit),
+		static_cast<unsigned long long>(m_block_id_pal_memo_miss),
+		static_cast<unsigned long long>(m_block_id_pal_other_ptr));
+	m_block_id_last = now;
 }
 #endif
 
@@ -6743,6 +6850,15 @@ void GSTextureCache::ReplaceSourceTexture(Source* s, GSTexture* new_texture, flo
 
 void GSTextureCache::IncAge()
 {
+#if GS_TC_HASH_STATS
+	PrintHashStatsIfDue();
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	PrintBlockIdVerifyIfDue();
+#endif
+#if GS_TC_BLOCK_ID_MUTATE == 1
+	s_gstcbid_frame++;
+#endif
 	static constexpr int max_age = 3;
 	static constexpr int max_preload_age = 30;
 
@@ -6820,6 +6936,9 @@ void GSTextureCache::IncAge()
 //Fixme: Several issues in here. Not handling depth stencil, pitch conversion doesnt work.
 GSTextureCache::Source* GSTextureCache::CreateSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const GIFRegCLAMP& CLAMP, Target* dst, int x_offset, int y_offset, const GSVector2i* lod, const GSVector4i* src_range, GSTexture* gpu_clut, SourceRegion region, bool force_temp)
 {
+#if GS_TC_HASH_STATS
+	m_hash_stats.create_source++;
+#endif
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	Source* src = new Source(TEX0, TEXA);
 
@@ -7741,17 +7860,73 @@ extern bool FMVstarted;
 
 GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, bool& paltex, const u32* clut, const GSVector2i* lod, SourceRegion region)
 {
+#if GS_TC_HASH_STATS
+	m_hash_stats.lhc_calls++;
+#endif
 	// don't bother hashing if we're not dumping or replacing.
 	const bool dump = GSConfig.DumpReplaceableTextures && (!FMVstarted || GSConfig.DumpTexturesWithFMVActive) &&
 	                  (clut ? GSConfig.DumpPaletteTextures : GSConfig.DumpDirectTextures);
 	const bool replace = GSConfig.LoadTextureReplacements && GSTextureReplacements::HasAnyReplacementTextures();
 	bool can_cache = (TEX0.PSM >= PSMT8H && TEX0.PSM <= PSMT4HH) ? CanPreloadTextureSize(TEX0.TW, TEX0.TH) : CanCacheTextureSize(TEX0.TW, TEX0.TH);
+#if GS_TC_HASH_STATS
+	if (dump)
+		m_hash_stats.lhc_dump++;
+	if (replace)
+		m_hash_stats.lhc_replace++;
+	if (!dump && !replace && !can_cache)
+		m_hash_stats.lhc_early++;
+#endif
 	if (!dump && !replace && !can_cache)
 		return nullptr;
 
+#if GS_TC_BLOCK_ID
+	const bool in_run = !dump && !replace;
+#endif
 	// need the hash either for replacing, dumping or caching.
 	// if dumping/replacing is on, we compute the clut hash regardless, since replacements aren't indexed
-	HashCacheKey key{HashCacheKey::Create(TEX0, TEXA, (dump || replace || !paltex) ? clut : nullptr, lod, region)};
+	HashCacheKey key{HashCacheKey::Create(TEX0, TEXA, (dump || replace || !paltex) ? clut : nullptr, lod, region
+#if GS_TC_BLOCK_ID
+		, in_run
+#endif
+	)};
+#if GS_TC_HASH_STATS
+	m_hash_stats.keys++;
+	if ((dump || replace || !paltex) && clut)
+		m_hash_stats.keys_clut++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	auto bid_fail = [](const char*) {
+		pxFailRel("GSTCBID mismatch");
+		std::abort();
+	};
+	auto bid_check_hit = [&](HashCacheEntry* entry) {
+		if (!in_run)
+			return;
+		m_block_id_hits_checked++;
+		if (entry->verify_xxh3 != s_block_id_last_xxh3)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=two_old_one_new old=%" PRIx64 " new=%" PRIx64,
+				entry->verify_xxh3, s_block_id_last_xxh3);
+			bid_fail("GSTCBID: mismatch kind=two_old_one_new");
+		}
+	};
+	auto bid_check_insert = [&](const HashCacheKey& ins) {
+		if (!in_run)
+			return;
+		m_block_id_inserts_checked++;
+		HashCacheKey old_key = ins;
+		old_key.TEX0Hash = s_block_id_last_xxh3;
+		old_key.TEX0.U64 &= ~1ULL;
+		auto found = m_block_id_old_to_new.find(old_key);
+		if (found != m_block_id_old_to_new.end() && found->second != ins)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=one_old_two_new old=%" PRIx64 " new=%" PRIx64,
+				found->second.TEX0Hash, ins.TEX0Hash);
+			bid_fail("GSTCBID: mismatch kind=one_old_two_new");
+		}
+		m_block_id_old_to_new[old_key] = ins;
+	};
+#endif
 
 	// handle dumping first, this is mostly isolated.
 	if (dump)
@@ -7788,6 +7963,12 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 		HashCacheEntry* entry = &it->second;
 		paltex &= (entry->texture->GetFormat() == GSTexture::Format::UNorm8);
 		entry->refcount++;
+#if GS_TC_HASH_STATS
+		m_hash_stats.hc_hit++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+		bid_check_hit(entry);
+#endif
 		return entry;
 	}
 
@@ -7807,6 +7988,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 			paltex = false;
 			const HashCacheEntry entry{replacement_tex, 1u, 0u, alpha_minmax, true, true};
 			m_hash_cache_replacement_memory_usage += entry.texture->GetMemUsage();
+#if GS_TC_HASH_STATS
+			m_hash_stats.hc_miss++;
+#endif
 			return &m_hash_cache.emplace(key, entry).first->second;
 		}
 		else if (
@@ -7842,6 +8026,10 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	}
 
 	// if this texture isn't cacheable, bail out now since we don't want to waste time preloading it
+#if GS_TC_HASH_STATS
+	if (!can_cache)
+		m_hash_stats.hc_null++;
+#endif
 	if (!can_cache)
 		return nullptr;
 
@@ -7853,6 +8041,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	if (!tex)
 	{
 		// out of video memory if we hit here
+#if GS_TC_HASH_STATS
+		m_hash_stats.hc_null++;
+#endif
 		return nullptr;
 	}
 
@@ -7890,6 +8081,18 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	// insert into the cache cache, and we're done
 	const HashCacheEntry entry{tex, 1u, 0u, alpha_minmax, compute_alpha_minmax, false};
 	m_hash_cache_memory_usage += tex->GetMemUsage();
+#if GS_TC_HASH_STATS
+	m_hash_stats.hc_miss++;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	if (in_run)
+	{
+		bid_check_insert(key);
+		HashCacheEntry* added = &m_hash_cache.emplace(key, entry).first->second;
+		added->verify_xxh3 = s_block_id_last_xxh3;
+		return added;
+	}
+#endif
 	return &m_hash_cache.emplace(key, entry).first->second;
 }
 
@@ -7902,6 +8105,15 @@ GSTextureCache::HashCacheMap::iterator GSTextureCache::RemoveFromHashCache(HashC
 	else
 		m_hash_cache_memory_usage -= mem_usage;
 	g_gs_device->Recycle(e.texture);
+#if GS_TC_BLOCK_ID_VERIFY
+	if (it->first.TEX0.U64 & 1ULL)
+	{
+		HashCacheKey old_key = it->first;
+		old_key.TEX0Hash = e.verify_xxh3;
+		old_key.TEX0.U64 &= ~1ULL;
+		m_block_id_old_to_new.erase(old_key);
+	}
+#endif
 	return m_hash_cache.erase(it);
 }
 
@@ -9572,6 +9784,12 @@ void GSTextureCache::Palette::InitializeTexture()
 u64 GSTextureCache::PaletteKeyHash::operator()(const PaletteKey& key) const
 {
 	pxAssert(key.pal == 16 || key.pal == 256);
+#if GS_TC_HASH_STATS
+	if (key.pal == 16)
+		s_hash_pal16++;
+	else
+		s_hash_pal256++;
+#endif
 	return key.pal == 16 ?
 	           GSXXH3_64bits(key.clut, sizeof(key.clut[0]) * 16) :
 	           GSXXH3_64bits(key.clut, sizeof(key.clut[0]) * 256);
@@ -9608,6 +9826,62 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 {
 	pxAssert(pal == 16 || pal == 256);
 
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.lp_calls++;
+	if (s_lp_prev_pal == pal && memcmp(s_lp_prev_clut, clut, static_cast<size_t>(pal) * sizeof(u32)) == 0)
+		g_texture_cache->m_hash_stats.lp_same++;
+	memcpy(s_lp_prev_clut, clut, static_cast<size_t>(pal) * sizeof(u32));
+	s_lp_prev_pal = pal;
+#endif
+
+#if GS_TC_BLOCK_ID
+	GSClut& gsclut = g_gs_renderer->m_mem.m_clut;
+	const u32* buff32 = gsclut.GetBuff32();
+	const u32 serial = gsclut.GetReadSerial();
+	if (clut != buff32)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_other_ptr++;
+#endif
+	}
+	else if (g_texture_cache->m_pal_memo_clut == clut && g_texture_cache->m_pal_memo_serial == serial &&
+		g_texture_cache->m_pal_memo_pal == pal && g_texture_cache->m_pal_memo_palette)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_memo_hit++;
+		const HashType fresh = PaletteKeyHash{}({clut, pal});
+		if (fresh != g_texture_cache->m_pal_memo_hash)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+				g_texture_cache->m_pal_memo_hash, fresh);
+			pxFailRel("GSTCBID mismatch");
+			std::abort();
+		}
+		auto& vmap = m_maps[pal == 16 ? 0 : 1];
+		const PaletteKey vkey = {clut, pal};
+		const auto vit = vmap.find(vkey);
+		if (vit == vmap.end() || vit->second != g_texture_cache->m_pal_memo_palette)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+				g_texture_cache->m_pal_memo_hash, fresh);
+			pxFailRel("GSTCBID mismatch");
+			std::abort();
+		}
+#endif
+		if (need_gs_texture && !g_texture_cache->m_pal_memo_palette->GetPaletteGSTexture())
+		{
+			g_texture_cache->m_pal_memo_palette->InitializeTexture();
+		}
+		return g_texture_cache->m_pal_memo_palette;
+	}
+	else
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_memo_miss++;
+#endif
+	}
+#endif
+
 	// Choose which hash map search into:
 	//    pal == 16  : index 0
 	//    pal == 256 : index 1
@@ -9620,12 +9894,25 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 
 	if (it1 != map.end())
 	{
+#if GS_TC_HASH_STATS
+		g_texture_cache->m_hash_stats.lp_hit++;
+#endif
 		// Clut content match, HIT
 		if (need_gs_texture && !it1->second->GetPaletteGSTexture())
 		{
 			// Generate GSTexture and upload clut content if needed and not done yet
 			it1->second->InitializeTexture();
 		}
+#if GS_TC_BLOCK_ID
+		if (clut == buff32)
+		{
+			g_texture_cache->m_pal_memo_clut = clut;
+			g_texture_cache->m_pal_memo_serial = serial;
+			g_texture_cache->m_pal_memo_pal = pal;
+			g_texture_cache->m_pal_memo_hash = PaletteKeyHash{}({clut, pal});
+			g_texture_cache->m_pal_memo_palette = it1->second;
+		}
+#endif
 		return it1->second;
 	}
 
@@ -9633,6 +9920,10 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 
 	if (map.size() > MAX_CACHED_PALETES)
 	{
+#if GS_TC_BLOCK_ID
+		// Drop the memo so its extra shared_ptr does not keep an unused palette in the map.
+		g_texture_cache->ClearPaletteMemo();
+#endif
 		// If the map is too big, try to clean it by disposing and removing unused palettes, before adding the new one
 		GL_INS("TC: WARNING, %u-bit PaletteMap (Size %u): Max size %u exceeded, clearing unused palettes.", pal * sizeof(u32), map.size(), MAX_CACHED_PALETES);
 
@@ -9667,12 +9958,25 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 		}
 	}
 
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.lp_miss++;
+#endif
 	std::shared_ptr<Palette> palette = std::make_shared<Palette>(clut, pal, need_gs_texture);
 
 	map.emplace(palette->GetPaletteKey(), palette);
 
 	GL_CACHE("TC: , %u-bit PaletteMap (Size %u): Added new palette.", pal * sizeof(u32), map.size());
 
+#if GS_TC_BLOCK_ID
+	if (clut == buff32)
+	{
+		g_texture_cache->m_pal_memo_clut = clut;
+		g_texture_cache->m_pal_memo_serial = serial;
+		g_texture_cache->m_pal_memo_pal = pal;
+		g_texture_cache->m_pal_memo_hash = PaletteKeyHash{}({clut, pal});
+		g_texture_cache->m_pal_memo_palette = palette;
+	}
+#endif
 	return palette;
 }
 
@@ -9683,6 +9987,9 @@ void GSTextureCache::PaletteMap::Clear()
 		map.clear(); // Clear all the nodes of the map, deleting Palette objects managed by shared pointers as they should be unused elsewhere
 		map.reserve(MAX_CACHED_PALETES); // Ensure map capacity is not modified by the clearing
 	}
+#if GS_TC_BLOCK_ID
+	g_texture_cache->ClearPaletteMemo();
+#endif
 }
 
 std::size_t GSTextureCache::SurfaceOffsetKeyHash::operator()(const GSTextureCache::SurfaceOffsetKey& key) const
@@ -9828,30 +10135,101 @@ GSTextureCache::SourceRegion GSTextureCache::SourceRegion::Create(GIFRegTEX0 TEX
 	return region;
 }
 
+#if GS_TC_BLOCK_ID
+struct BlockHashState
+{
+	XXH3_state_t xxh;
+	GSBlockId::Stream stream;
+	bool in_run;
+#if GS_TC_BLOCK_ID_VERIFY
+	GSTextureCache::HashType xxh3_digest;
+#endif
+};
+#else
 using BlockHashState = XXH3_state_t;
+#endif
 
 __fi static void BlockHashReset(BlockHashState& st)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+		st.stream.Reset();
+#if GS_TC_BLOCK_ID_VERIFY
+	XXH3_64bits_reset(&st.xxh);
+#else
+	if (!st.in_run)
+		XXH3_64bits_reset(&st.xxh);
+#endif
+#else
 	XXH3_64bits_reset(&st);
+#endif
 }
 
 __fi static void BlockHashAccumulate(BlockHashState& st, const u8* bp)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+		st.stream.Add(bp, GS_BLOCK_SIZE);
+#if GS_TC_BLOCK_ID_VERIFY
+		GSXXH3_64bits_update(&st.xxh, bp, GS_BLOCK_SIZE);
+		g_texture_cache->m_block_id_stream_bytes += GS_BLOCK_SIZE;
+#endif
+	}
+	else
+	{
+		GSXXH3_64bits_update(&st.xxh, bp, GS_BLOCK_SIZE);
+	}
+#else
 	GSXXH3_64bits_update(&st, bp, GS_BLOCK_SIZE);
+#endif
 }
 
 __fi static void BlockHashAccumulate(BlockHashState& st, const u8* bp, u32 size)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+		st.stream.Add(bp, size);
+#if GS_TC_BLOCK_ID_VERIFY
+		GSXXH3_64bits_update(&st.xxh, bp, size);
+		g_texture_cache->m_block_id_stream_bytes += size;
+#endif
+	}
+	else
+	{
+		GSXXH3_64bits_update(&st.xxh, bp, size);
+	}
+#else
 	GSXXH3_64bits_update(&st, bp, size);
+#endif
 }
 
 __fi static GSTextureCache::HashType FinishBlockHash(BlockHashState& st)
 {
+#if GS_TC_BLOCK_ID
+	if (st.in_run)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		st.xxh3_digest = GSXXH3_64bits_digest(&st.xxh);
+#endif
+		GSTextureCache::HashType h = st.stream.Finish();
+#if GS_TC_BLOCK_ID_MUTATE == 1
+		h ^= (s_gstcbid_frame & 1ull);
+#endif
+		return h;
+	}
+	return GSXXH3_64bits_digest(&st.xxh);
+#else
 	return GSXXH3_64bits_digest(&st);
+#endif
 }
 
 static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GSTextureCache::SourceRegion region, BlockHashState& hash_st, u8* temp)
 {
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.levels++;
+#endif
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	const GSVector2i& bs = psm.bs;
 	const int tw = region.HasX() ? region.GetWidth() : (1 << TEX0.TW);
@@ -9888,11 +10266,21 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 		if (pitch == row_size)
 		{
 			BlockHashAccumulate(hash_st, ptr, pitch * static_cast<u32>(th));
+#if GS_TC_HASH_STATS
+			g_texture_cache->m_hash_stats.partials++;
+			g_texture_cache->m_hash_stats.partial_bytes += pitch * static_cast<u32>(th);
+			g_texture_cache->m_hash_stats.bytes += pitch * static_cast<u32>(th);
+#endif
 		}
 		else
 		{
 			for (int y = 0; y < th; y++, ptr += pitch)
 				BlockHashAccumulate(hash_st, ptr, row_size);
+#if GS_TC_HASH_STATS
+			g_texture_cache->m_hash_stats.partials += static_cast<u64>(th);
+			g_texture_cache->m_hash_stats.partial_bytes += static_cast<u64>(row_size) * static_cast<u64>(th);
+			g_texture_cache->m_hash_stats.bytes += static_cast<u64>(row_size) * static_cast<u64>(th);
+#endif
 		}
 	}
 	else
@@ -9907,6 +10295,10 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 			for (int x = 0; bn.blkX() < right; bn.nextBlockX(), x += xAdd)
 			{
 				BlockHashAccumulate(hash_st, mem.BlockPtr(bn.value()));
+#if GS_TC_HASH_STATS
+				g_texture_cache->m_hash_stats.blocks++;
+				g_texture_cache->m_hash_stats.bytes += GS_BLOCK_SIZE;
+#endif
 			}
 		}
 	}
@@ -9915,8 +10307,14 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 GSTextureCache::HashType GSTextureCache::HashTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region)
 {
 	BlockHashState hash_st;
+#if GS_TC_BLOCK_ID
+	hash_st.in_run = true; // needs proper testing
+#endif
 	BlockHashReset(hash_st);
 	HashTextureLevel(TEX0, TEXA, region, hash_st, s_unswizzle_buffer);
+#if GS_TC_BLOCK_ID_VERIFY
+	g_texture_cache->m_block_id_preload_levels++;
+#endif
 	return FinishBlockHash(hash_st);
 }
 
@@ -9981,18 +10379,77 @@ GSTextureCache::HashCacheKey::HashCacheKey()
 	TEXA.U64 = 0;
 }
 
-GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region)
+GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region
+#if GS_TC_BLOCK_ID
+	, bool in_run
+#endif
+)
 {
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 
 	HashCacheKey ret;
 	ret.TEX0.U64 = TEX0.U64 & 0x00000003FFF00000ULL; // PSM, TW, TH
 	ret.TEXA.U64 = (psm.pal == 0 && psm.fmt > 0) ? (TEXA.U64 & 0x000000FF000080FFULL) : 0;
+#if GS_TC_BLOCK_ID
+	if (clut)
+	{
+		GSClut& gsclut = g_gs_renderer->m_mem.m_clut;
+		const u32* buff32 = gsclut.GetBuff32();
+		if (clut == buff32)
+		{
+			const u32 serial = gsclut.GetReadSerial();
+			const u16 pal = psm.pal;
+			if (g_texture_cache->m_pal_memo_clut == clut && g_texture_cache->m_pal_memo_serial == serial &&
+				g_texture_cache->m_pal_memo_pal == pal)
+			{
+#if GS_TC_BLOCK_ID_VERIFY
+				g_texture_cache->m_block_id_pal_memo_hit++;
+				const HashType fresh = GSTextureCache::PaletteKeyHash{}({clut, pal});
+				if (fresh != g_texture_cache->m_pal_memo_hash)
+				{
+					Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+						g_texture_cache->m_pal_memo_hash, fresh);
+					pxFailRel("GSTCBID mismatch");
+					std::abort();
+				}
+#endif
+				ret.CLUTHash = g_texture_cache->m_pal_memo_hash;
+			}
+			else
+			{
+#if GS_TC_BLOCK_ID_VERIFY
+				g_texture_cache->m_block_id_pal_memo_miss++;
+#endif
+				ret.CLUTHash = GSTextureCache::PaletteKeyHash{}({clut, pal});
+				g_texture_cache->m_pal_memo_clut = clut;
+				g_texture_cache->m_pal_memo_serial = serial;
+				g_texture_cache->m_pal_memo_pal = pal;
+				g_texture_cache->m_pal_memo_hash = ret.CLUTHash;
+				g_texture_cache->m_pal_memo_palette.reset();
+			}
+		}
+		else
+		{
+#if GS_TC_BLOCK_ID_VERIFY
+			g_texture_cache->m_block_id_pal_other_ptr++;
+#endif
+			ret.CLUTHash = GSTextureCache::PaletteKeyHash{}({clut, psm.pal});
+		}
+	}
+	else
+	{
+		ret.CLUTHash = 0;
+	}
+#else
 	ret.CLUTHash = clut ? GSTextureCache::PaletteKeyHash{}({clut, psm.pal}) : 0;
+#endif
 	ret.region_width = static_cast<u16>(region.GetWidth());
 	ret.region_height = static_cast<u16>(region.GetHeight());
 
 	BlockHashState hash_st;
+#if GS_TC_BLOCK_ID
+	hash_st.in_run = in_run; // needs proper testing
+#endif
 	BlockHashReset(hash_st);
 
 	// base level is always hashed
@@ -10011,6 +10468,16 @@ GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTE
 	}
 
 	ret.TEX0Hash = FinishBlockHash(hash_st);
+#if GS_TC_BLOCK_ID
+	if (in_run)
+		ret.TEX0.U64 |= 1ULL;
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+	if (in_run)
+		s_block_id_last_xxh3 = hash_st.xxh3_digest;
+	g_texture_cache->m_block_id_keys_inrun += in_run ? 1 : 0;
+	g_texture_cache->m_block_id_keys_leave += in_run ? 0 : 1;
+#endif
 
 	return ret;
 }

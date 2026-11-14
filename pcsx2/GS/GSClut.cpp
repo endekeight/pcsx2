@@ -135,6 +135,9 @@ void GSClut::Reset()
 	m_write.dirty = 1;
 	m_read = {};
 	m_read.dirty = true;
+#if GS_TC_BLOCK_ID
+	m_read_serial++;
+#endif
 }
 
 bool GSClut::InvalidateRange(u32 start_block, u32 end_block, bool is_draw)
@@ -251,6 +254,9 @@ void GSClut::VerifyRestore(const VerifyState& s)
 	m_CBP[1] = s.cbp[1];
 	if (m_clut)
 		memcpy(m_clut, s.clut, CLUT_ALLOC_SIZE);
+#if GS_TC_BLOCK_ID
+	m_read_serial++;
+#endif
 }
 #endif
 
@@ -397,6 +403,11 @@ void GSClut::Read32(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA)
 		m_read.TEXA = TEXA;
 		m_read.dirty = false;
 		m_read.adirty = true;
+#if GS_TC_BLOCK_ID
+#if GS_TC_BLOCK_ID_MUTATE != 2
+		m_read_serial++;
+#endif
+#endif
 
 		u16* clut = m_clut;
 

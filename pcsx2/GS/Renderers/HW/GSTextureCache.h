@@ -22,6 +22,11 @@ class GSHwHack;
 #define GS_TC_LOOKUP_STATS 0
 #endif
 
+// Count-only texture-cache hashing for the GSTCHASH line.
+#ifndef GS_TC_HASH_STATS
+#define GS_TC_HASH_STATS 0
+#endif
+
 // Skip the draw-target walk when the list head is already the answer.
 // Also skip InvalidateVideoMem source walks when no source occupies the written pages.
 // Also reuse the last end-block of a target's valid rectangle when the inputs are unchanged.
@@ -50,8 +55,17 @@ class GSHwHack;
 #error GS_TC_FAST_LOOKUP_MUTATE is not for a build with NDEBUG
 #endif
 
+#include "GS/GSBlockIdFlags.h"
+
 #if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
 #include <chrono>
+#endif
+#if GS_TC_HASH_STATS
+#include <chrono>
+#endif
+#if GS_TC_BLOCK_ID_VERIFY
+#include <chrono>
+#include <unordered_map>
 #endif
 
 class GSTextureCache
@@ -146,7 +160,11 @@ public:
 
 		HashCacheKey();
 
-		static HashCacheKey Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region);
+		static HashCacheKey Create(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const u32* clut, const GSVector2i* lod, SourceRegion region
+#if GS_TC_BLOCK_ID
+			, bool in_run
+#endif
+		);
 
 		HashCacheKey WithRemovedCLUTHash() const;
 		void RemoveCLUTHash();
@@ -170,6 +188,9 @@ public:
 		std::pair<u8, u8> alpha_minmax;
 		bool valid_alpha_minmax;
 		bool is_replacement;
+#if GS_TC_BLOCK_ID_VERIFY
+		HashType verify_xxh3 = 0;
+#endif
 	};
 
 	using HashCacheMap = std::unordered_map<HashCacheKey, HashCacheEntry, HashCacheKeyHash>;
@@ -493,6 +514,13 @@ protected:
 	SourceMap m_src;
 	u64 m_source_memory_usage = 0;
 	HashCacheMap m_hash_cache;
+#if GS_TC_BLOCK_ID
+	const u32* m_pal_memo_clut = nullptr;
+	u32 m_pal_memo_serial = 0;
+	u16 m_pal_memo_pal = 0;
+	HashType m_pal_memo_hash = 0;
+	std::shared_ptr<Palette> m_pal_memo_palette;
+#endif
 	u64 m_hash_cache_memory_usage = 0;
 	u64 m_hash_cache_replacement_memory_usage = 0;
 
@@ -534,6 +562,9 @@ protected:
 	HashCacheEntry* LookupHashCache(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, bool& paltex, const u32* clut, const GSVector2i* lod, SourceRegion region);
 	HashCacheMap::iterator RemoveFromHashCache(HashCacheMap::iterator it);
 	void AgeHashCache();
+#if GS_TC_BLOCK_ID
+	void ClearPaletteMemo();
+#endif
 
 	static void PreloadTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region, GSLocalMemory& mem, bool paltex, GSTexture* tex, u32 level, std::pair<u8, u8>* alpha_minmax);
 	static HashType HashTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region);
@@ -725,6 +756,36 @@ public:
 	void PrintLookupStatsIfDue();
 #endif
 
+#if GS_TC_HASH_STATS
+	struct HashStats
+	{
+		u64 lhc_calls = 0;
+		u64 lhc_early = 0;
+		u64 lhc_dump = 0;
+		u64 lhc_replace = 0;
+		u64 keys = 0;
+		u64 keys_clut = 0;
+		u64 hc_hit = 0;
+		u64 hc_miss = 0;
+		u64 hc_null = 0;
+		u64 levels = 0;
+		u64 blocks = 0;
+		u64 partials = 0;
+		u64 partial_bytes = 0;
+		u64 bytes = 0;
+		u64 lp_calls = 0;
+		u64 lp_hit = 0;
+		u64 lp_miss = 0;
+		u64 lp_same = 0;
+		u64 create_source = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	HashStats m_hash_stats{};
+
+	void PrintHashStatsIfDue();
+#endif
+
 #if GS_TC_FAST_LOOKUP_VERIFY
 	u64 m_fl_hits = 0;
 	u64 m_fl_misses = 0;
@@ -742,6 +803,22 @@ public:
 
 	void PrintFastLookupVerifyIfDue();
 	void VerifyNoSourceOccupancy(const GSOffset& off, const GSVector4i& rect, u32 start_bp, u32 end_bp);
+#endif
+
+#if GS_TC_BLOCK_ID_VERIFY
+	u64 m_block_id_keys_inrun = 0;
+	u64 m_block_id_keys_leave = 0;
+	u64 m_block_id_hits_checked = 0;
+	u64 m_block_id_inserts_checked = 0;
+	u64 m_block_id_stream_bytes = 0;
+	u64 m_block_id_preload_levels = 0;
+	u64 m_block_id_pal_memo_hit = 0;
+	u64 m_block_id_pal_memo_miss = 0;
+	u64 m_block_id_pal_other_ptr = 0;
+	std::unordered_map<HashCacheKey, HashCacheKey, HashCacheKeyHash> m_block_id_old_to_new;
+	std::chrono::steady_clock::time_point m_block_id_last{};
+
+	void PrintBlockIdVerifyIfDue();
 #endif
 };
 
