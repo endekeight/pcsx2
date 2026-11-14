@@ -506,6 +506,7 @@ endif()
 
 set(pcsx2GSSources
 	GS/GS.cpp
+	GS/GSBlockId.cpp
 	GS/GSCapture.cpp
 	GS/GSClut.cpp
 	GS/GSDrawingContext.cpp
@@ -540,6 +541,7 @@ set(pcsx2GSSources
 set(pcsx2GSHeaders
 	GS/GSAlignedClass.h
 	GS/GSBlock.h
+	GS/GSBlockId.h
 	GS/GSCapture.h
 	GS/GSClut.h
 	GS/GSDrawingContext.h
