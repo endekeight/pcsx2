@@ -8,7 +8,7 @@
 
 // Cheaper in-run identity of 256-byte local-memory blocks.
 #ifndef GS_TC_BLOCK_ID
-#define GS_TC_BLOCK_ID 0
+#define GS_TC_BLOCK_ID 1
 #endif
 // Oracle that the block-identity mixer matches the present hash-cache keys.
 #ifndef GS_TC_BLOCK_ID_VERIFY
