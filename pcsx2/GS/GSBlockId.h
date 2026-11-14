@@ -33,7 +33,7 @@ namespace GSBlockId
 		return Mix64(acc ^ Mix64(id + 0x9E3779B97F4A7C15ULL));
 	}
 
-	// "aes", "crc", or "portable".
+	// "aes" or "portable".
 	const char* ImplName();
 
 	// Identity of a byte stream. Independent of how Add is cut and of pointer alignment.
@@ -111,6 +111,5 @@ namespace GSBlockId
 	u64 HashPortable(const u8* block);
 #if defined(ARCH_ARM64)
 	u64 HashAES(const u8* block);
-	u64 HashCRC(const u8* block);
 #endif
 } // namespace GSBlockId

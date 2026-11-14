@@ -4,18 +4,7 @@
 #include "GS/GSBlockId.h"
 
 #if defined(ARCH_ARM64)
-	// arm_neon.h must see AES before any other include pulls it in without AES,
-	// or the AES intrinsics are omitted and a later include is skipped.
-#if !defined(__ARM_FEATURE_AES)
-#define __ARM_FEATURE_AES 1
-#define GS_BLOCK_ID_FORCED_AES
-#endif
 #include <arm_neon.h>
-#ifdef GS_BLOCK_ID_FORCED_AES
-#undef __ARM_FEATURE_AES
-#undef GS_BLOCK_ID_FORCED_AES
-#endif
-#include <arm_acle.h>
 #if defined(__linux__)
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
@@ -39,19 +28,10 @@ namespace GSBlockId
 
 #if defined(ARCH_ARM64)
 
-	static u64 LoadU64(const u8* p)
-	{
-		u64 w;
-		std::memcpy(&w, p, sizeof(w));
-		return w;
-	}
-
 #if defined(__GNUC__)
 #define GS_BLOCK_ID_TARGET_AES __attribute__((target("aes"), noinline))
-#define GS_BLOCK_ID_TARGET_CRC __attribute__((target("crc"), noinline))
 #else
 #define GS_BLOCK_ID_TARGET_AES
-#define GS_BLOCK_ID_TARGET_CRC
 #endif
 
 	GS_BLOCK_ID_TARGET_AES
@@ -89,20 +69,6 @@ namespace GSBlockId
 		return Mix64(lo + hi * 0x9E3779B97F4A7C15ULL);
 	}
 
-	GS_BLOCK_ID_TARGET_CRC
-	u64 HashCRC(const u8* block)
-	{
-		// CRC32 on even 64-bit words, CRC32C on odd words, then Mix64.
-		u32 c0 = 0xFFFFFFFFu;
-		u32 c1 = 0xFFFFFFFFu;
-		for (u32 i = 0; i < GS_BLOCK_SIZE; i += 16)
-		{
-			c0 = __crc32d(c0, LoadU64(block + i));
-			c1 = __crc32cd(c1, LoadU64(block + i + 8));
-		}
-		return Mix64((u64{c0} << 32) | c1);
-	}
-
 	static bool CpuHasAES()
 	{
 #if defined(__ARM_FEATURE_AES)
@@ -111,19 +77,6 @@ namespace GSBlockId
 		return true;
 #elif defined(__linux__)
 		return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
-#else
-		return false;
-#endif
-	}
-
-	static bool CpuHasCRC()
-	{
-#if defined(__ARM_FEATURE_CRC32)
-		return true;
-#elif defined(__APPLE__)
-		return true;
-#elif defined(__linux__)
-		return (getauxval(AT_HWCAP) & HWCAP_CRC32) != 0;
 #else
 		return false;
 #endif
@@ -140,30 +93,26 @@ namespace GSBlockId
 	static const Ops kPortableOps = {HashPortable, "portable"};
 #if defined(ARCH_ARM64)
 	static const Ops kAESOps = {HashAES, "aes"};
-	static const Ops kCRCOps = {HashCRC, "crc"};
 #endif
 
-	static const Ops& Selected()
+	static const Ops* SelectOps()
 	{
-		static const Ops* ops = []() -> const Ops* {
 #if defined(ARCH_ARM64)
-			if (CpuHasAES())
-				return &kAESOps;
-			if (CpuHasCRC())
-				return &kCRCOps;
+		if (CpuHasAES())
+			return &kAESOps;
 #endif
-			return &kPortableOps;
-		}();
-		return *ops;
+		return &kPortableOps;
 	}
+
+	static const Ops* const s_ops = SelectOps();
 
 	u64 Hash(const u8* block)
 	{
-		return Selected().hash(block);
+		return s_ops->hash(block);
 	}
 
 	const char* ImplName()
 	{
-		return Selected().name;
+		return s_ops->name;
 	}
 } // namespace GSBlockId

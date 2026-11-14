@@ -173,12 +173,9 @@ TEST(GSBlockId, HashSelected)
 #if defined(ARCH_ARM64)
 TEST(GSBlockId, HashAES)
 {
+	if (std::strcmp(GSBlockId::ImplName(), "aes") != 0)
+		GTEST_SKIP();
 	CheckHashFn(&GSBlockId::HashAES);
-}
-
-TEST(GSBlockId, HashCRC)
-{
-	CheckHashFn(&GSBlockId::HashCRC);
 }
 #endif
 
@@ -226,5 +223,5 @@ TEST(GSBlockId, ImplNameKnown)
 {
 	const char* name = GSBlockId::ImplName();
 	ASSERT_NE(name, nullptr);
-	EXPECT_TRUE(std::strcmp(name, "aes") == 0 || std::strcmp(name, "crc") == 0 || std::strcmp(name, "portable") == 0);
+	EXPECT_TRUE(std::strcmp(name, "aes") == 0 || std::strcmp(name, "portable") == 0);
 }

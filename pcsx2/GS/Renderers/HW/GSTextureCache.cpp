@@ -140,6 +140,9 @@ void GSTextureCache::RemoveAll(bool sources, bool targets, bool hash_cache)
 		m_hash_cache_replacement_memory_usage = 0;
 #if GS_TC_BLOCK_ID
 		ClearPaletteMemo();
+#if GS_TC_BLOCK_ID_VERIFY
+		m_block_id_old_to_new.clear();
+#endif
 #endif
 	}
 }
@@ -8102,6 +8105,15 @@ GSTextureCache::HashCacheMap::iterator GSTextureCache::RemoveFromHashCache(HashC
 	else
 		m_hash_cache_memory_usage -= mem_usage;
 	g_gs_device->Recycle(e.texture);
+#if GS_TC_BLOCK_ID_VERIFY
+	if (it->first.TEX0.U64 & 1ULL)
+	{
+		HashCacheKey old_key = it->first;
+		old_key.TEX0Hash = e.verify_xxh3;
+		old_key.TEX0.U64 &= ~1ULL;
+		m_block_id_old_to_new.erase(old_key);
+	}
+#endif
 	return m_hash_cache.erase(it);
 }
 
@@ -9908,6 +9920,10 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 
 	if (map.size() > MAX_CACHED_PALETES)
 	{
+#if GS_TC_BLOCK_ID
+		// Drop the memo so its extra shared_ptr does not keep an unused palette in the map.
+		g_texture_cache->ClearPaletteMemo();
+#endif
 		// If the map is too big, try to clean it by disposing and removing unused palettes, before adding the new one
 		GL_INS("TC: WARNING, %u-bit PaletteMap (Size %u): Max size %u exceeded, clearing unused palettes.", pal * sizeof(u32), map.size(), MAX_CACHED_PALETES);
 
