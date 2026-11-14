@@ -12,6 +12,7 @@
 #include "GS/Renderers/Common/GSVertexTrace.h"
 #include "GS/Renderers/Common/GSDevice.h"
 #include "GS/GSVector.h"
+#include "GS/GSGifFused.h"
 #include "GSAlignedClass.h"
 
 // C110 diagnostic: counts GIF packed-vertex parsing and auto-flush work for the GSPARSE line. Ships 0.
@@ -19,8 +20,21 @@
 // so every translation unit must see the same value.
 #define GS_PARSE_STATS 0
 
+// Count-only census of GIF packed register layouts, by primitive type. Ships 0.
+// Defined only here, never on the compiler command line: GSState's layout depends on it,
+// so every translation unit must see the same value.
+#define GS_GIF_LAYOUT_STATS 0
+
 #if GS_PARSE_STATS
 #include <chrono>
+#endif
+
+#if GS_GIF_LAYOUT_STATS
+#include <chrono>
+#endif
+#if GS_GIF_FUSED_VERIFY
+#include <chrono>
+#include <vector>
 #endif
 
 class GSDumpBase;
@@ -68,6 +82,18 @@ private:
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
 	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size);
 	void GIFPackedRegHandlerNOP(const GIFPackedReg* RESTRICT r, u32 size);
+
+#if GS_GIF_FUSED_LAYOUTS
+	typedef void (GSState::*GIFPackedRegHandlerFusedL2)(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
+	GIFPackedRegHandlerFusedL2 m_fpGIFPackedRegHandlerRGBASTXYZF2[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerRGBASTXYZF2(const GIFPackedReg* RESTRICT r, u32 size, u32 pairs);
+	typedef void (GSState::*GIFPackedRegHandlerFusedL1)(const GIFPackedReg* RESTRICT r, u32 size);
+	GIFPackedRegHandlerFusedL1 m_fpGIFPackedRegHandlerADSTQRGBAXYZF2[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerADSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size);
+	typedef void (GSState::*GIFPackedRegHandlerFusedL3)(const GIFPackedReg* RESTRICT r, u32 size);
+	GIFPackedRegHandlerFusedL3 m_fpGIFPackedRegHandlerSTQRGBAXYZ2x4[8] = {};
+	template<u32 prim, bool auto_flush> void GIFPackedRegHandlerSTQRGBAXYZ2x4(const GIFPackedReg* RESTRICT r, u32 size);
+#endif
 
 	template<int i> void ApplyTEX0(GIFRegTEX0& TEX0);
 	void ApplyPRIM(u32 prim);
@@ -159,6 +185,37 @@ protected:
 	ParseStats m_parse_stats{};
 #endif
 
+#if GS_GIF_LAYOUT_STATS
+	struct GifLayoutEntry
+	{
+		u64 regs = 0;
+		u8 nreg = 0;
+		u8 type = 0;
+		u8 prim = 0;
+		u64 packets = 0;
+		u64 qwords = 0;
+	};
+
+	struct GifLayoutStats
+	{
+		GifLayoutEntry table[64]{};
+		u32 used = 0;
+		u8 packed_prim[4]{};
+		u64 overflow_packets = 0;
+		u64 overflow_qwords = 0;
+		u64 reglist_q = 0;
+		u64 image_q = 0;
+		u64 empty_tags = 0;
+		u64 transfers = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	GifLayoutStats m_gif_layout_stats{};
+
+	void AddGifLayoutPacked(const GIFPath& path, u8 prim, u64 packets, u64 qwords);
+	void MaybePrintGifLayoutStats();
+#endif
+
 	GSVertex m_v = {};
 	float m_q = 1.0f;
 	GSVector4i m_xyof = {};
@@ -208,6 +265,125 @@ protected:
 	};
 
 	GSDrawBufferEnv m_env_buffers[MAX_DRAW_BUFFERS] = {};
+
+#if GS_GIF_FUSED_VERIFY
+	struct FusedLayoutCounters
+	{
+		u64 seen = 0;
+		u64 accepted = 0;
+		u64 refused = 0;
+		u64 verify_a = 0;
+		u64 verify_ok = 0;
+		u64 verify_f = 0;
+		u64 verify_f_ok = 0;
+		u64 skip_write = 0;
+		u64 skip_grow = 0;
+		u64 skip_move = 0;
+		u64 skip_partial = 0;
+		u64 skip_state = 0;
+		u64 l1_break_prim = 0;
+		u64 l1_refused_ad = 0;
+	};
+
+	struct FusedVerifySnap
+	{
+		GSVertex v = {};
+		float q = 1.0f;
+		u32 dirty_gs_regs = 0;
+		int backed_up_ctx = 0;
+		GSVector4i temp_draw_rect = GSVector4i::zero();
+		GSDrawingEnvironment env = {};
+		GSDrawingEnvironment prev_env = {};
+		bool texflush_flag = false;
+		bool isPackedUV_HackFlag = false;
+		int tr_x = 0, tr_y = 0, tr_w = 0, tr_h = 0;
+		int tr_start = 0, tr_end = 0, tr_total = 0;
+		GSVector4i tr_rect = GSVector4i::zero();
+		GIFRegBITBLTBUF tr_blit = {};
+		GIFRegTRXPOS tr_pos = {};
+		GIFRegTRXREG tr_reg = {};
+		bool tr_write = false;
+		int current_buffer_idx = 0;
+		int used_buffers_idx = 0;
+		bool recent_buffer_switch = false;
+		GSVector4i xyof = {};
+		bool scissor_invalid = false;
+		GIFPackedRegHandler packed_xyz[8][4] = {};
+		GIFRegHandler reg_xyz[8][4] = {};
+		GIFPackedRegHandlerC packed_c[2] = {};
+		GIFPackedRegHandler packed_handlers[16] = {};
+		GIFRegHandler reg_handlers[256] = {};
+#if GS_GIF_FUSED_LAYOUTS
+		GIFPackedRegHandlerFusedL2 l2_handlers[8] = {};
+		GIFPackedRegHandlerFusedL1 l1_handlers[8] = {};
+		GIFPackedRegHandlerFusedL3 l3_handlers[8] = {};
+#endif
+		u32 kicks = 0;
+		u32 flush_reason = 0;
+		GSDrawBufferEnv env_buffers[MAX_DRAW_BUFFERS] = {};
+		u32 v_head[MAX_DRAW_BUFFERS] = {};
+		u32 v_tail[MAX_DRAW_BUFFERS] = {};
+		u32 v_next[MAX_DRAW_BUFFERS] = {};
+		u32 v_xy_tail[MAX_DRAW_BUFFERS] = {};
+		GSVector4i v_xy[MAX_DRAW_BUFFERS][4] = {};
+		GSVector4i v_xyhead[MAX_DRAW_BUFFERS] = {};
+		u32 i_tail[MAX_DRAW_BUFFERS] = {};
+		std::vector<GSVertex> vbuff[MAX_DRAW_BUFFERS];
+		std::vector<u16> ibuff[MAX_DRAW_BUFFERS];
+		GSClut::VerifyState clut = {};
+		bool channel_shuffle_finish = false;
+		bool trial_inval = false;
+	};
+
+	FusedLayoutCounters m_fused_counters[3]{};
+	FusedVerifySnap m_fused_snap{};
+	FusedVerifySnap m_fused_post{};
+	FusedVerifySnap m_fused_flush{};
+	std::chrono::steady_clock::time_point m_fused_stats_last{};
+	int m_fused_verify_guard = 0;
+	int m_fused_verify_trial = 0;
+	u32 m_fused_verify_skip = 0;
+	u32 m_fused_trial_kicks = 0;
+	bool m_fused_flush_captured = false;
+	bool m_fused_trial_inval = false;
+	const u8** m_fused_verify_mem = nullptr;
+	u32 m_fused_verify_total = 0;
+	u64 m_fused_l1_addr[128]{};
+
+	void FusedVerifyCapture(FusedVerifySnap& s);
+	bool FusedVerifyRestore(const FusedVerifySnap& s);
+	bool FusedVerifyCompare(const FusedVerifySnap& a, const FusedVerifySnap& b, const char* layout, u64 packet);
+	void FusedVerifyFail(const char* layout, const char* field, u64 packet, const char* values);
+	void MaybePrintFusedStats();
+	void FusedVerifyNoteWrite()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 2u;
+	}
+	void FusedVerifyNoteGrow()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 4u;
+	}
+	void FusedVerifyNoteMove()
+	{
+		if (m_fused_verify_guard)
+			m_fused_verify_skip |= 8u;
+	}
+#if GS_GIF_FUSED_LAYOUTS
+	void FusedVerifyPerQuadword(GIFPath& path, const u8* mem, u32 total);
+	bool FusedVerifyTakeSkip(FusedLayoutCounters& c);
+	void FusedVerifyMutate(FusedVerifySnap& s, int layout);
+	void FusedVerifyDualRun(GIFPath& path, const u8*& mem, u32 total, int layout, const char* name);
+	void FusedVerifyRunL1(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL1 handler);
+	void FusedVerifyRunL2(GIFPath& path, const u8*& mem, u32 total, u32 pairs, GIFPackedRegHandlerFusedL2 handler);
+	void FusedVerifyRunL3(GIFPath& path, const u8*& mem, u32 total, GIFPackedRegHandlerFusedL3 handler);
+	GIFPackedRegHandlerFusedL1 m_fused_run_l1 = nullptr;
+	GIFPackedRegHandlerFusedL2 m_fused_run_l2 = nullptr;
+	GIFPackedRegHandlerFusedL3 m_fused_run_l3 = nullptr;
+	u32 m_fused_run_pairs = 0;
+#endif
+#endif
 
 	void UpdateContext();
 	void UpdateScissor();
@@ -285,6 +461,14 @@ protected:
 	static void GetQuadRasterizedPoints(GSVector4& xy, GSVector4& tex, bool keep_order = true);
 
 public:
+#if GS_GIF_FUSED_VERIFY
+	void FusedVerifyNoteInval()
+	{
+		if (m_fused_verify_trial)
+			m_fused_trial_inval = true;
+	}
+	bool FusedVerifyIsTrial() const { return m_fused_verify_trial != 0; }
+#endif
 	enum EEGS_TransferType
 	{
 		EE_to_GS,

@@ -762,6 +762,13 @@ void GSRendererSW::InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererSW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut)
 {
+#if GS_GIF_FUSED_VERIFY
+	if (m_fused_verify_trial)
+	{
+		FusedVerifyNoteInval();
+		return;
+	}
+#endif
 	if constexpr (LOG)
 	{
 		fprintf(s_fp, "%s %05x %u %u, %d %d %d %d\n", clut ? "rp" : "r", BITBLTBUF.SBP, BITBLTBUF.SBW, BITBLTBUF.SPSM, r.x, r.y, r.z, r.w);

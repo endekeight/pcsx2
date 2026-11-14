@@ -4,6 +4,7 @@ add_pcsx2_test(core_test
 	GS/texture_block_index_tests.cpp
 	GS/sw_texture_buffer_tests.cpp
 	GS/tc_fast_lookup_tests.cpp
+	GS/gif_fused_layout_tests.cpp
 	MockMemoryInterface.h
 	StubHost.cpp
 )

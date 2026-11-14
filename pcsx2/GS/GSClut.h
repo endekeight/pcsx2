@@ -120,6 +120,20 @@ public:
 	bool CanLoadCLUT(const GIFRegTEX0& TEX0, const bool update_CBP = false);
 	bool WriteTest(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT);
 	void Write(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT);
+#if GS_GIF_FUSED_VERIFY
+	struct VerifyState
+	{
+		GIFRegTEX0 write_tex0 = {};
+		GIFRegTEXCLUT write_texclut = {};
+		u8 write_dirty = 0;
+		u64 write_next_tex0 = 0;
+		bool read_dirty = false;
+		u32 cbp[2] = {};
+		u8 clut[CLUT_ALLOC_SIZE] = {};
+	};
+	void VerifySave(VerifyState& s) const;
+	void VerifyRestore(const VerifyState& s);
+#endif
 	//void Read(const GIFRegTEX0& TEX0);
 	void Read32(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA);
 	void GetAlphaMinMax32(int& amin, int& amax);

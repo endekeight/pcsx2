@@ -10,6 +10,7 @@
 //#define GSTITLEINFO_API_FORCE_VERBOSE
 
 #include "GSVector.h"
+#include "GSGifFused.h"
 
 constexpr u32 VM_SIZE = 4194304u;
 constexpr u32 HALF_VM_SIZE = (VM_SIZE / 2u);
@@ -1143,6 +1144,12 @@ struct alignas(32) GIFPath
 		TYPE_ADONLY,
 		TYPE_STQRGBAXYZF2,
 		TYPE_STQRGBAXYZ2
+#if GS_GIF_FUSED_LAYOUTS
+		, TYPE_RGBASTXYZF2x4
+		, TYPE_RGBASTXYZF2x3
+		, TYPE_ADSTQRGBAXYZF2
+		, TYPE_STQRGBAXYZ2x4
+#endif
 	};
 
 	__forceinline void SetTag(const void* mem)
@@ -1194,12 +1201,20 @@ struct alignas(32) GIFPath
 						// TODO: common types with UV instead
 						break;
 					case 4:
+#if GS_GIF_FUSED_LAYOUTS
+						if (MatchPackedLayoutL1(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_ADSTQRGBAXYZF2;
+#endif
 						break;
 					case 5:
 						break;
 					case 6:
 						break;
 					case 7:
+#if GS_GIF_FUSED_LAYOUTS
+						if (MatchPackedLayoutL2x3(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_RGBASTXYZF2x3;
+#endif
 						break;
 					case 8:
 						break;
@@ -1211,6 +1226,10 @@ struct alignas(32) GIFPath
 							nreg = 3;
 							nloop *= 3;
 						}
+#if GS_GIF_FUSED_LAYOUTS
+						else if (MatchPackedLayoutL2x4(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_RGBASTXYZF2x4;
+#endif
 						break;
 					case 10:
 						break;
@@ -1224,6 +1243,10 @@ struct alignas(32) GIFPath
 							nreg = 3;
 							nloop *= 4;
 						}
+#if GS_GIF_FUSED_LAYOUTS
+						else if (MatchPackedLayoutL3(nreg, regs.U32[0], regs.U32[1], regs.U32[2]))
+							type = TYPE_STQRGBAXYZ2x4;
+#endif
 						break;
 					case 13:
 						break;

@@ -226,6 +226,34 @@ void GSClut::Write(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT)
 	(this->*m_wc[TEX0.CSM][TEX0.CPSM][TEX0.PSM])(TEX0, TEXCLUT);
 }
 
+#if GS_GIF_FUSED_VERIFY
+void GSClut::VerifySave(VerifyState& s) const
+{
+	s.write_tex0 = m_write.TEX0;
+	s.write_texclut = m_write.TEXCLUT;
+	s.write_dirty = m_write.dirty;
+	s.write_next_tex0 = m_write.next_tex0;
+	s.read_dirty = m_read.dirty;
+	s.cbp[0] = m_CBP[0];
+	s.cbp[1] = m_CBP[1];
+	if (m_clut)
+		memcpy(s.clut, m_clut, CLUT_ALLOC_SIZE);
+}
+
+void GSClut::VerifyRestore(const VerifyState& s)
+{
+	m_write.TEX0 = s.write_tex0;
+	m_write.TEXCLUT = s.write_texclut;
+	m_write.dirty = s.write_dirty;
+	m_write.next_tex0 = s.write_next_tex0;
+	m_read.dirty = s.read_dirty;
+	m_CBP[0] = s.cbp[0];
+	m_CBP[1] = s.cbp[1];
+	if (m_clut)
+		memcpy(m_clut, s.clut, CLUT_ALLOC_SIZE);
+}
+#endif
+
 void GSClut::WriteCLUT32_I8_CSM1(const GIFRegTEX0& TEX0, const GIFRegTEXCLUT& TEXCLUT)
 {
 	ALIGN_STACK(32);

@@ -2369,6 +2369,13 @@ void GSRendererHW::InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut)
 {
+#if GS_GIF_FUSED_VERIFY
+	if (m_fused_verify_trial)
+	{
+		FusedVerifyNoteInval();
+		return;
+	}
+#endif
 	// printf("HW: [%d] InvalidateLocalMem %d,%d - %d,%d %05x (%d)\n", static_cast<int>(g_perfmon.GetFrame()), r.left, r.top, r.right, r.bottom, static_cast<int>(BITBLTBUF.SBP), static_cast<int>(BITBLTBUF.SPSM));
 
 	if (clut)
@@ -2399,14 +2406,28 @@ void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererHW::Move()
 {
+#if GS_GIF_FUSED_VERIFY
+	if (m_fused_verify_trial)
+	{
+		FusedVerifyNoteMove();
+		return;
+	}
+#endif
 	if (m_mv && m_mv(*this))
 	{
+#if GS_GIF_FUSED_VERIFY
+		FusedVerifyNoteMove();
+#endif
 		// Handled by HW hack.
 		return;
 	}
 
 	if (m_env.TRXDIR.XDIR == 3)
 		return;
+
+#if GS_GIF_FUSED_VERIFY
+	FusedVerifyNoteMove();
+#endif
 
 	const int sx = m_env.TRXPOS.SSAX;
 	const int sy = m_env.TRXPOS.SSAY;
