@@ -22,6 +22,11 @@ class GSHwHack;
 #define GS_TC_LOOKUP_STATS 0
 #endif
 
+// Count-only texture-cache hashing for the GSTCHASH line.
+#ifndef GS_TC_HASH_STATS
+#define GS_TC_HASH_STATS 0
+#endif
+
 // Skip the draw-target walk when the list head is already the answer.
 // Also skip InvalidateVideoMem source walks when no source occupies the written pages.
 // Also reuse the last end-block of a target's valid rectangle when the inputs are unchanged.
@@ -51,6 +56,9 @@ class GSHwHack;
 #endif
 
 #if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
+#include <chrono>
+#endif
+#if GS_TC_HASH_STATS
 #include <chrono>
 #endif
 
@@ -723,6 +731,36 @@ public:
 	u64 m_lookup_stats_tf_src_this = 0;
 
 	void PrintLookupStatsIfDue();
+#endif
+
+#if GS_TC_HASH_STATS
+	struct HashStats
+	{
+		u64 lhc_calls = 0;
+		u64 lhc_early = 0;
+		u64 lhc_dump = 0;
+		u64 lhc_replace = 0;
+		u64 keys = 0;
+		u64 keys_clut = 0;
+		u64 hc_hit = 0;
+		u64 hc_miss = 0;
+		u64 hc_null = 0;
+		u64 levels = 0;
+		u64 blocks = 0;
+		u64 partials = 0;
+		u64 partial_bytes = 0;
+		u64 bytes = 0;
+		u64 lp_calls = 0;
+		u64 lp_hit = 0;
+		u64 lp_miss = 0;
+		u64 lp_same = 0;
+		u64 create_source = 0;
+		std::chrono::steady_clock::time_point last{};
+	};
+
+	HashStats m_hash_stats{};
+
+	void PrintHashStatsIfDue();
 #endif
 
 #if GS_TC_FAST_LOOKUP_VERIFY

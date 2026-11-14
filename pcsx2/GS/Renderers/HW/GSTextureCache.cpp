@@ -25,6 +25,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#endif
+#if GS_TC_HASH_STATS
+#include <cstring>
 #endif>
 
 #ifdef __APPLE__
@@ -36,6 +39,13 @@
 std::unique_ptr<GSTextureCache> g_texture_cache;
 
 static u8* s_unswizzle_buffer;
+
+#if GS_TC_HASH_STATS
+static u64 s_hash_pal16 = 0;
+static u64 s_hash_pal256 = 0;
+static u32 s_lp_prev_clut[256] = {};
+static u16 s_lp_prev_pal = 0;
+#endif
 
 /// List of candidates for purging when the hash cache gets too large.
 static std::vector<std::pair<GSTextureCache::HashCacheMap::iterator, s32>> s_hash_cache_purge_list;
@@ -2483,6 +2493,47 @@ void GSTextureCache::PrintLookupStatsIfDue()
 		static_cast<unsigned long long>(m_lookup_stats.eov_same));
 	m_lookup_stats = {};
 	m_lookup_stats.last = now;
+}
+#endif
+
+#if GS_TC_HASH_STATS
+void GSTextureCache::PrintHashStatsIfDue()
+{
+	const auto now = std::chrono::steady_clock::now();
+	if (m_hash_stats.last == std::chrono::steady_clock::time_point{})
+	{
+		m_hash_stats.last = now;
+		return;
+	}
+	if (now - m_hash_stats.last < std::chrono::seconds(1))
+		return;
+
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_hash_stats.last).count();
+	Console.WriteLn("GSTCHASH: ms=%lld lhc_calls=%llu lhc_early=%llu lhc_dump=%llu lhc_replace=%llu keys=%llu keys_clut=%llu hc_hit=%llu hc_miss=%llu hc_null=%llu levels=%llu blocks=%llu partials=%llu partial_bytes=%llu bytes=%llu",
+		static_cast<long long>(ms),
+		static_cast<unsigned long long>(m_hash_stats.lhc_calls),
+		static_cast<unsigned long long>(m_hash_stats.lhc_early),
+		static_cast<unsigned long long>(m_hash_stats.lhc_dump),
+		static_cast<unsigned long long>(m_hash_stats.lhc_replace),
+		static_cast<unsigned long long>(m_hash_stats.keys),
+		static_cast<unsigned long long>(m_hash_stats.keys_clut),
+		static_cast<unsigned long long>(m_hash_stats.hc_hit),
+		static_cast<unsigned long long>(m_hash_stats.hc_miss),
+		static_cast<unsigned long long>(m_hash_stats.hc_null),
+		static_cast<unsigned long long>(m_hash_stats.levels),
+		static_cast<unsigned long long>(m_hash_stats.blocks),
+		static_cast<unsigned long long>(m_hash_stats.partials),
+		static_cast<unsigned long long>(m_hash_stats.partial_bytes),
+		static_cast<unsigned long long>(m_hash_stats.bytes));
+	Console.WriteLn("GSTCHASH: pal16=%llu pal256=%llu lp_calls=%llu lp_hit=%llu lp_miss=%llu lp_same=%llu create_source=%llu",
+		static_cast<unsigned long long>(s_hash_pal16),
+		static_cast<unsigned long long>(s_hash_pal256),
+		static_cast<unsigned long long>(m_hash_stats.lp_calls),
+		static_cast<unsigned long long>(m_hash_stats.lp_hit),
+		static_cast<unsigned long long>(m_hash_stats.lp_miss),
+		static_cast<unsigned long long>(m_hash_stats.lp_same),
+		static_cast<unsigned long long>(m_hash_stats.create_source));
+	m_hash_stats.last = now;
 }
 #endif
 
@@ -6743,6 +6794,9 @@ void GSTextureCache::ReplaceSourceTexture(Source* s, GSTexture* new_texture, flo
 
 void GSTextureCache::IncAge()
 {
+#if GS_TC_HASH_STATS
+	PrintHashStatsIfDue();
+#endif
 	static constexpr int max_age = 3;
 	static constexpr int max_preload_age = 30;
 
@@ -6820,6 +6874,9 @@ void GSTextureCache::IncAge()
 //Fixme: Several issues in here. Not handling depth stencil, pitch conversion doesnt work.
 GSTextureCache::Source* GSTextureCache::CreateSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const GIFRegCLAMP& CLAMP, Target* dst, int x_offset, int y_offset, const GSVector2i* lod, const GSVector4i* src_range, GSTexture* gpu_clut, SourceRegion region, bool force_temp)
 {
+#if GS_TC_HASH_STATS
+	m_hash_stats.create_source++;
+#endif
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	Source* src = new Source(TEX0, TEXA);
 
@@ -7741,17 +7798,33 @@ extern bool FMVstarted;
 
 GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, bool& paltex, const u32* clut, const GSVector2i* lod, SourceRegion region)
 {
+#if GS_TC_HASH_STATS
+	m_hash_stats.lhc_calls++;
+#endif
 	// don't bother hashing if we're not dumping or replacing.
 	const bool dump = GSConfig.DumpReplaceableTextures && (!FMVstarted || GSConfig.DumpTexturesWithFMVActive) &&
 	                  (clut ? GSConfig.DumpPaletteTextures : GSConfig.DumpDirectTextures);
 	const bool replace = GSConfig.LoadTextureReplacements && GSTextureReplacements::HasAnyReplacementTextures();
 	bool can_cache = (TEX0.PSM >= PSMT8H && TEX0.PSM <= PSMT4HH) ? CanPreloadTextureSize(TEX0.TW, TEX0.TH) : CanCacheTextureSize(TEX0.TW, TEX0.TH);
+#if GS_TC_HASH_STATS
+	if (dump)
+		m_hash_stats.lhc_dump++;
+	if (replace)
+		m_hash_stats.lhc_replace++;
+	if (!dump && !replace && !can_cache)
+		m_hash_stats.lhc_early++;
+#endif
 	if (!dump && !replace && !can_cache)
 		return nullptr;
 
 	// need the hash either for replacing, dumping or caching.
 	// if dumping/replacing is on, we compute the clut hash regardless, since replacements aren't indexed
 	HashCacheKey key{HashCacheKey::Create(TEX0, TEXA, (dump || replace || !paltex) ? clut : nullptr, lod, region)};
+#if GS_TC_HASH_STATS
+	m_hash_stats.keys++;
+	if ((dump || replace || !paltex) && clut)
+		m_hash_stats.keys_clut++;
+#endif
 
 	// handle dumping first, this is mostly isolated.
 	if (dump)
@@ -7788,6 +7861,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 		HashCacheEntry* entry = &it->second;
 		paltex &= (entry->texture->GetFormat() == GSTexture::Format::UNorm8);
 		entry->refcount++;
+#if GS_TC_HASH_STATS
+		m_hash_stats.hc_hit++;
+#endif
 		return entry;
 	}
 
@@ -7807,6 +7883,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 			paltex = false;
 			const HashCacheEntry entry{replacement_tex, 1u, 0u, alpha_minmax, true, true};
 			m_hash_cache_replacement_memory_usage += entry.texture->GetMemUsage();
+#if GS_TC_HASH_STATS
+			m_hash_stats.hc_miss++;
+#endif
 			return &m_hash_cache.emplace(key, entry).first->second;
 		}
 		else if (
@@ -7842,6 +7921,10 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	}
 
 	// if this texture isn't cacheable, bail out now since we don't want to waste time preloading it
+#if GS_TC_HASH_STATS
+	if (!can_cache)
+		m_hash_stats.hc_null++;
+#endif
 	if (!can_cache)
 		return nullptr;
 
@@ -7853,6 +7936,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	if (!tex)
 	{
 		// out of video memory if we hit here
+#if GS_TC_HASH_STATS
+		m_hash_stats.hc_null++;
+#endif
 		return nullptr;
 	}
 
@@ -7890,6 +7976,9 @@ GSTextureCache::HashCacheEntry* GSTextureCache::LookupHashCache(const GIFRegTEX0
 	// insert into the cache cache, and we're done
 	const HashCacheEntry entry{tex, 1u, 0u, alpha_minmax, compute_alpha_minmax, false};
 	m_hash_cache_memory_usage += tex->GetMemUsage();
+#if GS_TC_HASH_STATS
+	m_hash_stats.hc_miss++;
+#endif
 	return &m_hash_cache.emplace(key, entry).first->second;
 }
 
@@ -9572,6 +9661,12 @@ void GSTextureCache::Palette::InitializeTexture()
 u64 GSTextureCache::PaletteKeyHash::operator()(const PaletteKey& key) const
 {
 	pxAssert(key.pal == 16 || key.pal == 256);
+#if GS_TC_HASH_STATS
+	if (key.pal == 16)
+		s_hash_pal16++;
+	else
+		s_hash_pal256++;
+#endif
 	return key.pal == 16 ?
 	           GSXXH3_64bits(key.clut, sizeof(key.clut[0]) * 16) :
 	           GSXXH3_64bits(key.clut, sizeof(key.clut[0]) * 256);
@@ -9608,6 +9703,14 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 {
 	pxAssert(pal == 16 || pal == 256);
 
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.lp_calls++;
+	if (s_lp_prev_pal == pal && memcmp(s_lp_prev_clut, clut, static_cast<size_t>(pal) * sizeof(u32)) == 0)
+		g_texture_cache->m_hash_stats.lp_same++;
+	memcpy(s_lp_prev_clut, clut, static_cast<size_t>(pal) * sizeof(u32));
+	s_lp_prev_pal = pal;
+#endif
+
 	// Choose which hash map search into:
 	//    pal == 16  : index 0
 	//    pal == 256 : index 1
@@ -9620,6 +9723,9 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 
 	if (it1 != map.end())
 	{
+#if GS_TC_HASH_STATS
+		g_texture_cache->m_hash_stats.lp_hit++;
+#endif
 		// Clut content match, HIT
 		if (need_gs_texture && !it1->second->GetPaletteGSTexture())
 		{
@@ -9667,6 +9773,9 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 		}
 	}
 
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.lp_miss++;
+#endif
 	std::shared_ptr<Palette> palette = std::make_shared<Palette>(clut, pal, need_gs_texture);
 
 	map.emplace(palette->GetPaletteKey(), palette);
@@ -9852,6 +9961,9 @@ __fi static GSTextureCache::HashType FinishBlockHash(BlockHashState& st)
 
 static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GSTextureCache::SourceRegion region, BlockHashState& hash_st, u8* temp)
 {
+#if GS_TC_HASH_STATS
+	g_texture_cache->m_hash_stats.levels++;
+#endif
 	const GSLocalMemory::psm_t& psm = GSLocalMemory::m_psm[TEX0.PSM];
 	const GSVector2i& bs = psm.bs;
 	const int tw = region.HasX() ? region.GetWidth() : (1 << TEX0.TW);
@@ -9888,11 +10000,21 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 		if (pitch == row_size)
 		{
 			BlockHashAccumulate(hash_st, ptr, pitch * static_cast<u32>(th));
+#if GS_TC_HASH_STATS
+			g_texture_cache->m_hash_stats.partials++;
+			g_texture_cache->m_hash_stats.partial_bytes += pitch * static_cast<u32>(th);
+			g_texture_cache->m_hash_stats.bytes += pitch * static_cast<u32>(th);
+#endif
 		}
 		else
 		{
 			for (int y = 0; y < th; y++, ptr += pitch)
 				BlockHashAccumulate(hash_st, ptr, row_size);
+#if GS_TC_HASH_STATS
+			g_texture_cache->m_hash_stats.partials += static_cast<u64>(th);
+			g_texture_cache->m_hash_stats.partial_bytes += static_cast<u64>(row_size) * static_cast<u64>(th);
+			g_texture_cache->m_hash_stats.bytes += static_cast<u64>(row_size) * static_cast<u64>(th);
+#endif
 		}
 	}
 	else
@@ -9907,6 +10029,10 @@ static void HashTextureLevel(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, GST
 			for (int x = 0; bn.blkX() < right; bn.nextBlockX(), x += xAdd)
 			{
 				BlockHashAccumulate(hash_st, mem.BlockPtr(bn.value()));
+#if GS_TC_HASH_STATS
+				g_texture_cache->m_hash_stats.blocks++;
+				g_texture_cache->m_hash_stats.bytes += GS_BLOCK_SIZE;
+#endif
 			}
 		}
 	}
