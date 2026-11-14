@@ -55,31 +55,7 @@ class GSHwHack;
 #error GS_TC_FAST_LOOKUP_MUTATE is not for a build with NDEBUG
 #endif
 
-// Cheaper in-run identity of 256-byte local-memory blocks.
-#ifndef GS_TC_BLOCK_ID
-#define GS_TC_BLOCK_ID 0
-#endif
-// Oracle that the block-identity mixer matches the present hash-cache keys.
-#ifndef GS_TC_BLOCK_ID_VERIFY
-#define GS_TC_BLOCK_ID_VERIFY 0
-#endif
-// Select one mutation so the verify check must fire.
-#ifndef GS_TC_BLOCK_ID_MUTATE
-#define GS_TC_BLOCK_ID_MUTATE 0
-#endif
-
-#if GS_TC_BLOCK_ID_VERIFY && !GS_TC_BLOCK_ID
-#error GS_TC_BLOCK_ID_VERIFY requires GS_TC_BLOCK_ID
-#endif
-#if GS_TC_BLOCK_ID_MUTATE && !GS_TC_BLOCK_ID_VERIFY
-#error GS_TC_BLOCK_ID_MUTATE requires GS_TC_BLOCK_ID_VERIFY
-#endif
-#if GS_TC_BLOCK_ID_VERIFY && defined(NDEBUG)
-#error GS_TC_BLOCK_ID_VERIFY is not for a build with NDEBUG
-#endif
-#if GS_TC_BLOCK_ID_MUTATE && defined(NDEBUG)
-#error GS_TC_BLOCK_ID_MUTATE is not for a build with NDEBUG
-#endif
+#include "GS/GSBlockIdFlags.h"
 
 #if GS_TC_LOOKUP_STATS || GS_TC_FAST_LOOKUP_VERIFY
 #include <chrono>
@@ -538,6 +514,13 @@ protected:
 	SourceMap m_src;
 	u64 m_source_memory_usage = 0;
 	HashCacheMap m_hash_cache;
+#if GS_TC_BLOCK_ID
+	const u32* m_pal_memo_clut = nullptr;
+	u32 m_pal_memo_serial = 0;
+	u16 m_pal_memo_pal = 0;
+	HashType m_pal_memo_hash = 0;
+	std::shared_ptr<Palette> m_pal_memo_palette;
+#endif
 	u64 m_hash_cache_memory_usage = 0;
 	u64 m_hash_cache_replacement_memory_usage = 0;
 
@@ -579,6 +562,9 @@ protected:
 	HashCacheEntry* LookupHashCache(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, bool& paltex, const u32* clut, const GSVector2i* lod, SourceRegion region);
 	HashCacheMap::iterator RemoveFromHashCache(HashCacheMap::iterator it);
 	void AgeHashCache();
+#if GS_TC_BLOCK_ID
+	void ClearPaletteMemo();
+#endif
 
 	static void PreloadTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region, GSLocalMemory& mem, bool paltex, GSTexture* tex, u32 level, std::pair<u8, u8>* alpha_minmax);
 	static HashType HashTexture(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, SourceRegion region);
@@ -826,6 +812,9 @@ public:
 	u64 m_block_id_inserts_checked = 0;
 	u64 m_block_id_stream_bytes = 0;
 	u64 m_block_id_preload_levels = 0;
+	u64 m_block_id_pal_memo_hit = 0;
+	u64 m_block_id_pal_memo_miss = 0;
+	u64 m_block_id_pal_other_ptr = 0;
 	std::unordered_map<HashCacheKey, HashCacheKey, HashCacheKeyHash> m_block_id_old_to_new;
 	std::chrono::steady_clock::time_point m_block_id_last{};
 

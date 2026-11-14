@@ -138,8 +138,22 @@ void GSTextureCache::RemoveAll(bool sources, bool targets, bool hash_cache)
 		m_hash_cache.clear();
 		m_hash_cache_memory_usage = 0;
 		m_hash_cache_replacement_memory_usage = 0;
+#if GS_TC_BLOCK_ID
+		ClearPaletteMemo();
+#endif
 	}
 }
+
+#if GS_TC_BLOCK_ID
+void GSTextureCache::ClearPaletteMemo()
+{
+	m_pal_memo_clut = nullptr;
+	m_pal_memo_serial = 0;
+	m_pal_memo_pal = 0;
+	m_pal_memo_hash = 0;
+	m_pal_memo_palette.reset();
+}
+#endif
 
 bool GSTextureCache::FullRectDirty(Target* target, u32 rgba_mask)
 {
@@ -2561,14 +2575,17 @@ void GSTextureCache::PrintBlockIdVerifyIfDue()
 	if (now - m_block_id_last < std::chrono::seconds(1))
 		return;
 
-	Console.WriteLn("GSTCBID: impl=%s keys_inrun=%llu keys_leave=%llu hits_checked=%llu inserts_checked=%llu stream_bytes=%llu preload_levels=%llu",
+	Console.WriteLn("GSTCBID: impl=%s keys_inrun=%llu keys_leave=%llu hits_checked=%llu inserts_checked=%llu stream_bytes=%llu preload_levels=%llu pal_memo_hit=%llu pal_memo_miss=%llu pal_other_ptr=%llu",
 		GSBlockId::ImplName(),
 		static_cast<unsigned long long>(m_block_id_keys_inrun),
 		static_cast<unsigned long long>(m_block_id_keys_leave),
 		static_cast<unsigned long long>(m_block_id_hits_checked),
 		static_cast<unsigned long long>(m_block_id_inserts_checked),
 		static_cast<unsigned long long>(m_block_id_stream_bytes),
-		static_cast<unsigned long long>(m_block_id_preload_levels));
+		static_cast<unsigned long long>(m_block_id_preload_levels),
+		static_cast<unsigned long long>(m_block_id_pal_memo_hit),
+		static_cast<unsigned long long>(m_block_id_pal_memo_miss),
+		static_cast<unsigned long long>(m_block_id_pal_other_ptr));
 	m_block_id_last = now;
 }
 #endif
@@ -9805,6 +9822,54 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 	s_lp_prev_pal = pal;
 #endif
 
+#if GS_TC_BLOCK_ID
+	GSClut& gsclut = g_gs_renderer->m_mem.m_clut;
+	const u32* buff32 = gsclut.GetBuff32();
+	const u32 serial = gsclut.GetReadSerial();
+	if (clut != buff32)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_other_ptr++;
+#endif
+	}
+	else if (g_texture_cache->m_pal_memo_clut == clut && g_texture_cache->m_pal_memo_serial == serial &&
+		g_texture_cache->m_pal_memo_pal == pal && g_texture_cache->m_pal_memo_palette)
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_memo_hit++;
+		const HashType fresh = PaletteKeyHash{}({clut, pal});
+		if (fresh != g_texture_cache->m_pal_memo_hash)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+				g_texture_cache->m_pal_memo_hash, fresh);
+			pxFailRel("GSTCBID mismatch");
+			std::abort();
+		}
+		auto& vmap = m_maps[pal == 16 ? 0 : 1];
+		const PaletteKey vkey = {clut, pal};
+		const auto vit = vmap.find(vkey);
+		if (vit == vmap.end() || vit->second != g_texture_cache->m_pal_memo_palette)
+		{
+			Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+				g_texture_cache->m_pal_memo_hash, fresh);
+			pxFailRel("GSTCBID mismatch");
+			std::abort();
+		}
+#endif
+		if (need_gs_texture && !g_texture_cache->m_pal_memo_palette->GetPaletteGSTexture())
+		{
+			g_texture_cache->m_pal_memo_palette->InitializeTexture();
+		}
+		return g_texture_cache->m_pal_memo_palette;
+	}
+	else
+	{
+#if GS_TC_BLOCK_ID_VERIFY
+		g_texture_cache->m_block_id_pal_memo_miss++;
+#endif
+	}
+#endif
+
 	// Choose which hash map search into:
 	//    pal == 16  : index 0
 	//    pal == 256 : index 1
@@ -9826,6 +9891,16 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 			// Generate GSTexture and upload clut content if needed and not done yet
 			it1->second->InitializeTexture();
 		}
+#if GS_TC_BLOCK_ID
+		if (clut == buff32)
+		{
+			g_texture_cache->m_pal_memo_clut = clut;
+			g_texture_cache->m_pal_memo_serial = serial;
+			g_texture_cache->m_pal_memo_pal = pal;
+			g_texture_cache->m_pal_memo_hash = PaletteKeyHash{}({clut, pal});
+			g_texture_cache->m_pal_memo_palette = it1->second;
+		}
+#endif
 		return it1->second;
 	}
 
@@ -9876,6 +9951,16 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::PaletteMap::LookupPalet
 
 	GL_CACHE("TC: , %u-bit PaletteMap (Size %u): Added new palette.", pal * sizeof(u32), map.size());
 
+#if GS_TC_BLOCK_ID
+	if (clut == buff32)
+	{
+		g_texture_cache->m_pal_memo_clut = clut;
+		g_texture_cache->m_pal_memo_serial = serial;
+		g_texture_cache->m_pal_memo_pal = pal;
+		g_texture_cache->m_pal_memo_hash = PaletteKeyHash{}({clut, pal});
+		g_texture_cache->m_pal_memo_palette = palette;
+	}
+#endif
 	return palette;
 }
 
@@ -9886,6 +9971,9 @@ void GSTextureCache::PaletteMap::Clear()
 		map.clear(); // Clear all the nodes of the map, deleting Palette objects managed by shared pointers as they should be unused elsewhere
 		map.reserve(MAX_CACHED_PALETES); // Ensure map capacity is not modified by the clearing
 	}
+#if GS_TC_BLOCK_ID
+	g_texture_cache->ClearPaletteMemo();
+#endif
 }
 
 std::size_t GSTextureCache::SurfaceOffsetKeyHash::operator()(const GSTextureCache::SurfaceOffsetKey& key) const
@@ -10286,7 +10374,59 @@ GSTextureCache::HashCacheKey GSTextureCache::HashCacheKey::Create(const GIFRegTE
 	HashCacheKey ret;
 	ret.TEX0.U64 = TEX0.U64 & 0x00000003FFF00000ULL; // PSM, TW, TH
 	ret.TEXA.U64 = (psm.pal == 0 && psm.fmt > 0) ? (TEXA.U64 & 0x000000FF000080FFULL) : 0;
+#if GS_TC_BLOCK_ID
+	if (clut)
+	{
+		GSClut& gsclut = g_gs_renderer->m_mem.m_clut;
+		const u32* buff32 = gsclut.GetBuff32();
+		if (clut == buff32)
+		{
+			const u32 serial = gsclut.GetReadSerial();
+			const u16 pal = psm.pal;
+			if (g_texture_cache->m_pal_memo_clut == clut && g_texture_cache->m_pal_memo_serial == serial &&
+				g_texture_cache->m_pal_memo_pal == pal)
+			{
+#if GS_TC_BLOCK_ID_VERIFY
+				g_texture_cache->m_block_id_pal_memo_hit++;
+				const HashType fresh = GSTextureCache::PaletteKeyHash{}({clut, pal});
+				if (fresh != g_texture_cache->m_pal_memo_hash)
+				{
+					Console.WriteLn("GSTCBID: mismatch kind=palette_memo memo=%" PRIx64 " fresh=%" PRIx64,
+						g_texture_cache->m_pal_memo_hash, fresh);
+					pxFailRel("GSTCBID mismatch");
+					std::abort();
+				}
+#endif
+				ret.CLUTHash = g_texture_cache->m_pal_memo_hash;
+			}
+			else
+			{
+#if GS_TC_BLOCK_ID_VERIFY
+				g_texture_cache->m_block_id_pal_memo_miss++;
+#endif
+				ret.CLUTHash = GSTextureCache::PaletteKeyHash{}({clut, pal});
+				g_texture_cache->m_pal_memo_clut = clut;
+				g_texture_cache->m_pal_memo_serial = serial;
+				g_texture_cache->m_pal_memo_pal = pal;
+				g_texture_cache->m_pal_memo_hash = ret.CLUTHash;
+				g_texture_cache->m_pal_memo_palette.reset();
+			}
+		}
+		else
+		{
+#if GS_TC_BLOCK_ID_VERIFY
+			g_texture_cache->m_block_id_pal_other_ptr++;
+#endif
+			ret.CLUTHash = GSTextureCache::PaletteKeyHash{}({clut, psm.pal});
+		}
+	}
+	else
+	{
+		ret.CLUTHash = 0;
+	}
+#else
 	ret.CLUTHash = clut ? GSTextureCache::PaletteKeyHash{}({clut, psm.pal}) : 0;
+#endif
 	ret.region_width = static_cast<u16>(region.GetWidth());
 	ret.region_height = static_cast<u16>(region.GetHeight());
 
