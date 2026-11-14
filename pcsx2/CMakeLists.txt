@@ -542,6 +542,7 @@ set(pcsx2GSHeaders
 	GS/GSAlignedClass.h
 	GS/GSBlock.h
 	GS/GSBlockId.h
+	GS/GSBlockIdFlags.h
 	GS/GSCapture.h
 	GS/GSClut.h
 	GS/GSDrawingContext.h
