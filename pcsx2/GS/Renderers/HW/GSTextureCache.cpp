@@ -28,7 +28,7 @@
 #endif
 #if GS_TC_HASH_STATS
 #include <cstring>
-#endif>
+#endif
 
 #ifdef __APPLE__
 #include <stdlib.h>
