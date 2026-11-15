@@ -6,6 +6,9 @@
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
+#if GS_KICK_CHUNKED
+#include "GS/GSVertexKickChunked.h"
+#endif
 
 #include "common/Console.h"
 #include "common/BitUtils.h"
@@ -1517,6 +1520,20 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 
 	CheckFlushes();
 
+#if GS_KICK_VERIFY
+	KickVerifyRun<prim, auto_flush>(r, size);
+#else
+#if GS_KICK_CHUNKED
+	// needs proper testing
+	if constexpr (prim == GS_TRIANGLESTRIP)
+	{
+		if (size >= 18 && !GSConfig.UserHacks_DrawBuffering)
+		{
+			KickTriangleStripChunkedSTQRGBAXYZF2<auto_flush>(r, size);
+			return;
+		}
+	}
+#endif
 	const GIFPackedReg* RESTRICT r_end = r + size;
 
 	while (r < r_end)
@@ -1542,7 +1559,635 @@ void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u3
 	}
 
 	m_q = r[-3].STQ.Q; // remember the last one, STQ outputs this to the temp Q each time
+#endif
 }
+
+#if GS_KICK_CHUNKED
+// needs proper testing
+template <bool auto_flush>
+void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	u32 remaining = size / 3;
+	const GIFPackedReg* RESTRICT cur_r = r;
+
+#if GS_KICK_VERIFY
+	const bool count_stats = m_kv.recording;
+	const u32 total_packet_verts = remaining;
+	if (count_stats)
+	{
+		m_kv.chunk_calls++;
+		m_kv.chunk_verts += total_packet_verts;
+	}
+	u32 chunk_converted_verts = 0;
+#endif
+
+	const bool aa1_expand = PRIM->AA1 && IsCoverageAlphaSupported();
+	GSChunkedKick::DepthLimitMode depth_limit = GSChunkedKick::DepthLimitMode::Disabled;
+	if (GSIsHardwareRenderer() && GSLocalMemory::m_psm[m_context->ZBUF.PSM].bpp == 32)
+	{
+		if (GSConfig.UserHacks_Limit24BitDepth == GSLimit24BitDepth::PrioritizeUpper)
+			depth_limit = GSChunkedKick::DepthLimitMode::PrioritizeUpper;
+		else if (GSConfig.UserHacks_Limit24BitDepth == GSLimit24BitDepth::PrioritizeLower)
+			depth_limit = GSChunkedKick::DepthLimitMode::PrioritizeLower;
+	}
+
+	constexpr u32 max_prim_vertices = MaxVerticesForPrim(GS_TRIANGLESTRIP);
+
+	const GIFPackedReg* deferred_r = nullptr;
+	u32 deferred_count = 0;
+	u32 deferred_slot = 0;
+
+	const auto flush_deferred_trailing = [&]()
+	{
+		if (deferred_count > 0 && m_vertex->next < m_vertex->head)
+		{
+			const u32 gap = m_vertex->head - m_vertex->next;
+			const u32 to_convert = std::min<u32>(deferred_count, gap);
+			GSChunkedKick::ConvertVertexRange(
+				deferred_r, 0, to_convert, deferred_slot,
+				m_v.UV, depth_limit, m_vertex->buff);
+#if GS_KICK_VERIFY
+			if (count_stats)
+				chunk_converted_verts += to_convert;
+#endif
+		}
+		deferred_r = nullptr;
+		deferred_count = 0;
+		deferred_slot = 0;
+	};
+
+	const auto step_one_vertex = [&]()
+	{
+		const GSVector4i st = GSVector4i::loadl(&cur_r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&cur_r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&cur_r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
+
+		m_v.m[0] = st.upl64(rgba.upl32(q));
+
+		GSVector4i xy = GSVector4i::loadl(&cur_r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&cur_r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf);
+
+		VertexKick<GS_TRIANGLESTRIP, auto_flush>(cur_r[2].XYZF2.Skip());
+
+		cur_r += 3;
+		remaining--;
+	};
+
+	while (remaining > 0)
+	{
+		const u32 prim_capped = GSChunkedKick::TriangleStripChunkCountToVertexLimit(
+			remaining, m_vertex->tail, max_prim_vertices);
+		const u32 buf_room = (m_vertex->tail < m_max_vertex_count) ? (m_max_vertex_count - m_vertex->tail) : 0;
+		const u32 idx_cap = (m_max_vertex_count + 3) * 6;
+		const u32 idx_room_verts = (m_index->tail < idx_cap) ? ((idx_cap - m_index->tail) / 3) : 0;
+		const u32 chunk_count = std::min<u32>({prim_capped, buf_room, idx_room_verts});
+
+		if (remaining < 6 || chunk_count < 6)
+		{
+#if GS_KICK_VERIFY
+			if (count_stats)
+			{
+				m_kv.chunk_bail_verts++;
+				chunk_converted_verts++;
+				if (remaining < 6)
+					m_kv.chunk_bail_remainder++;
+				else
+					m_kv.chunk_bail_room++;
+			}
+#endif
+			flush_deferred_trailing();
+			step_one_vertex();
+			continue;
+		}
+
+		if constexpr (auto_flush)
+		{
+			const GSHWAutoFlushLevel af_level = GSIsHardwareRenderer()
+				? GSConfig.UserHacks_AutoFlush
+				: GSHWAutoFlushLevel::Enabled;
+			if (!GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(*PRIM, *m_context, af_level))
+			{
+#if GS_KICK_VERIFY
+				if (count_stats)
+				{
+					m_kv.chunk_bail_verts += chunk_count;
+					m_kv.chunk_bail_autoflush += chunk_count;
+					chunk_converted_verts += chunk_count;
+				}
+#endif
+				flush_deferred_trailing();
+				for (u32 step = 0; step < chunk_count; ++step)
+					step_one_vertex();
+				continue;
+			}
+		}
+
+#if GS_PARSE_STATS
+		m_parse_stats.kicks += chunk_count;
+		if constexpr (auto_flush)
+			m_parse_stats.af_kicks += chunk_count;
+#endif
+
+		const u32 pending = (m_vertex->tail >= m_vertex->head) ? (m_vertex->tail - m_vertex->head) : 0;
+		const u32 carried_count = std::min<u32>(pending, 2);
+		GSVector4i carried_xy[2];
+		if (carried_count == 1)
+		{
+			carried_xy[0] = m_vertex->xy[(m_vertex->xy_tail - 1) & 3];
+		}
+		else if (carried_count == 2)
+		{
+			carried_xy[0] = m_vertex->xy[(m_vertex->xy_tail - 2) & 3];
+			carried_xy[1] = m_vertex->xy[(m_vertex->xy_tail - 1) & 3];
+		}
+
+		const GSChunkedKick::DecidedChunk decided = GSChunkedKick::DecideTriangleStripPacked(
+			cur_r, chunk_count, carried_xy, carried_count, m_xyof,
+			m_context->scissor.cull, m_scissor_invalid, m_nativeres, aa1_expand);
+
+		const u32 prev_itail = m_index->tail;
+		if (decided.accepted_count > 0 && prev_itail == 0)
+		{
+			const int ctx = m_env.PRIM.CTXT;
+			std::memcpy(&m_prev_env, &m_env, 88);
+			std::memcpy(&m_prev_env.CTXT[ctx], &m_env.CTXT[ctx], 96);
+			std::memcpy(&m_prev_env.CTXT[ctx].offset, &m_env.CTXT[ctx].offset, sizeof(m_env.CTXT[ctx].offset));
+			std::memcpy(&m_prev_env.CTXT[ctx].scissor, &m_env.CTXT[ctx].scissor, sizeof(m_env.CTXT[ctx].scissor));
+			m_dirty_gs_regs = 0;
+			m_backed_up_ctx = m_env.PRIM.CTXT;
+		}
+
+		const bool is_last_chunk = (chunk_count == remaining);
+		const GSChunkedKick::PlannedChunk planned = GSChunkedKick::PlanTriangleStrip(
+			decided.accept, chunk_count,
+			m_vertex->head, m_vertex->tail, m_vertex->next, m_index->tail,
+			m_index->buff, is_last_chunk);
+
+#if GS_KICK_VERIFY
+		if (count_stats)
+		{
+			for (u32 j = 0; j < planned.job_count; ++j)
+				chunk_converted_verts += (planned.jobs[j].to - planned.jobs[j].from);
+		}
+#endif
+
+		GSChunkedKick::ConvertTriangleStripChunk(
+			cur_r, chunk_count, planned, m_v.UV, m_xyof, depth_limit,
+			m_vertex->buff, m_vertex->xy, m_vertex->xy_tail, m_v, m_q);
+
+		m_vertex->head = planned.head;
+		m_vertex->tail = planned.tail;
+		m_vertex->next = planned.next;
+		m_index->tail = planned.itail;
+
+		if (decided.accepted_count > 0)
+		{
+			deferred_r = nullptr;
+			deferred_count = 0;
+			deferred_slot = 0;
+		}
+
+		if (is_last_chunk)
+		{
+			flush_deferred_trailing();
+		}
+		else
+		{
+			const u32 chunk_trailing = planned.trailing_to - planned.trailing_from;
+			if (chunk_trailing > 0)
+			{
+				if (deferred_count == 0)
+				{
+					deferred_r = cur_r + 3 * planned.trailing_from;
+					deferred_count = chunk_trailing;
+					deferred_slot = planned.trailing_slot;
+				}
+				else
+				{
+					deferred_count += chunk_trailing;
+				}
+			}
+		}
+
+		if (decided.accepted_count > 0)
+		{
+			if (prev_itail != 0)
+				temp_draw_rect = temp_draw_rect.runion(decided.draw_rect);
+			else
+				temp_draw_rect = decided.draw_rect;
+			temp_draw_rect = temp_draw_rect.rintersect(m_context->scissor.in);
+		}
+
+		cur_r += 3 * chunk_count;
+		remaining -= chunk_count;
+
+		// VertexKick flushes as soon as tail reaches MaxVerticesForPrim after an
+		// accepted vertex. The room cap above keeps this chunk from writing past
+		// that limit; Flush here so the draw splits on the same vertex.
+		if (GSChunkedKick::TriangleStripNeedsVertexCountFlush(
+				m_vertex->tail, max_prim_vertices, decided.IsAccepted(chunk_count - 1)))
+		{
+			flush_deferred_trailing();
+			Flush(VERTEXCOUNT);
+		}
+	}
+
+	flush_deferred_trailing();
+	m_q = r[size - 3].STQ.Q;
+
+#if GS_KICK_VERIFY
+	if (count_stats)
+	{
+		if (total_packet_verts >= chunk_converted_verts)
+			m_kv.chunk_unconverted += (total_packet_verts - chunk_converted_verts);
+	}
+#endif
+}
+#endif
+
+#if GS_KICK_VERIFY
+u64 GSState::KickVerifyHash(const GIFPackedReg* r, u32 size)
+{
+	const u8* bytes = reinterpret_cast<const u8*>(r);
+	const size_t total_bytes = size * sizeof(GIFPackedReg);
+	u64 hash = 14695981039346656037ull;
+	for (size_t i = 0; i < total_bytes; ++i)
+	{
+		hash ^= static_cast<u64>(bytes[i]);
+		hash *= 1099511628211ull;
+	}
+	return hash;
+}
+
+void GSState::KickVerifyCapture(KickVerifySnap& s, u32 vtx_begin, u32 vtx_end, u32 idx_begin, u32 idx_end)
+{
+	std::memset(&s.f, 0, sizeof(s.f));
+	s.f.head = m_vertex->head;
+	s.f.tail = m_vertex->tail;
+	s.f.next = m_vertex->next;
+	s.f.xy_tail = m_vertex->xy_tail;
+	for (int i = 0; i < 4; ++i)
+		s.f.xy[i] = m_vertex->xy[i];
+	s.f.xyhead = m_vertex->xyhead;
+	s.f.idx_tail = m_index->tail;
+	s.f.v = m_v;
+	s.f.q = m_q;
+	s.f.temp_draw_rect = temp_draw_rect;
+	s.f.dirty_gs_regs = m_dirty_gs_regs;
+	s.f.backed_up_ctx = m_backed_up_ctx;
+	s.f.texflush_flag = m_texflush_flag ? 1u : 0u;
+
+	std::memcpy(&s.prev_env, &m_prev_env, sizeof(m_prev_env));
+
+	s.max_vertex_count = m_max_vertex_count;
+
+	const u32 vcap = m_max_vertex_count + 3;
+	const u32 icap = (m_max_vertex_count + 3) * 6;
+
+	vtx_end = std::min(vtx_end, vcap);
+	vtx_begin = std::min(vtx_begin, vtx_end);
+	idx_end = std::min(idx_end, icap);
+	idx_begin = std::min(idx_begin, idx_end);
+
+	s.vtx_begin = vtx_begin;
+	s.vtx_end = vtx_end;
+	s.idx_begin = idx_begin;
+	s.idx_end = idx_end;
+
+	const u32 vcount = vtx_end - vtx_begin;
+	s.vtx.resize(vcount);
+	if (vcount > 0)
+		std::memcpy(s.vtx.data(), m_vertex->buff + vtx_begin, vcount * sizeof(GSVertex));
+
+	const u32 icount = idx_end - idx_begin;
+	s.idx.resize(icount);
+	if (icount > 0)
+		std::memcpy(s.idx.data(), m_index->buff + idx_begin, icount * sizeof(u16));
+}
+
+void GSState::KickVerifyRestore(const KickVerifySnap& s)
+{
+	m_vertex->head = s.f.head;
+	m_vertex->tail = s.f.tail;
+	m_vertex->next = s.f.next;
+	m_vertex->xy_tail = s.f.xy_tail;
+	for (int i = 0; i < 4; ++i)
+		m_vertex->xy[i] = s.f.xy[i];
+	m_vertex->xyhead = s.f.xyhead;
+	m_index->tail = s.f.idx_tail;
+	m_v = s.f.v;
+	m_q = s.f.q;
+	temp_draw_rect = s.f.temp_draw_rect;
+	m_dirty_gs_regs = s.f.dirty_gs_regs;
+	m_backed_up_ctx = s.f.backed_up_ctx;
+	m_texflush_flag = (s.f.texflush_flag != 0);
+
+	std::memcpy(&m_prev_env, &s.prev_env, sizeof(m_prev_env));
+
+	if (!s.vtx.empty())
+		std::memcpy(m_vertex->buff + s.vtx_begin, s.vtx.data(), s.vtx.size() * sizeof(GSVertex));
+
+	if (!s.idx.empty())
+		std::memcpy(m_index->buff + s.idx_begin, s.idx.data(), s.idx.size() * sizeof(u16));
+}
+
+bool GSState::KickVerifyCompare(const KickVerifySnap& live, const KickVerifySnap& ref, const char* point, u32 k)
+{
+	const char* diff_field = nullptr;
+	if (live.f.head != ref.f.head) diff_field = "head";
+	else if (live.f.tail != ref.f.tail) diff_field = "tail";
+	else if (live.f.next != ref.f.next) diff_field = "next";
+	else if (live.f.xy_tail != ref.f.xy_tail) diff_field = "xy_tail";
+	else if (!live.f.xy[0].eq(ref.f.xy[0])) diff_field = "xy[0]";
+	else if (!live.f.xy[1].eq(ref.f.xy[1])) diff_field = "xy[1]";
+	else if (!live.f.xy[2].eq(ref.f.xy[2])) diff_field = "xy[2]";
+	else if (!live.f.xy[3].eq(ref.f.xy[3])) diff_field = "xy[3]";
+	else if (!live.f.xyhead.eq(ref.f.xyhead)) diff_field = "xyhead";
+	else if (live.f.idx_tail != ref.f.idx_tail) diff_field = "idx_tail";
+	else if (std::memcmp(&live.f.v, &ref.f.v, sizeof(GSVertex)) != 0) diff_field = "v";
+	else if (live.f.q != ref.f.q) diff_field = "q";
+	else if (!live.f.temp_draw_rect.eq(ref.f.temp_draw_rect)) diff_field = "temp_draw_rect";
+	else if (live.f.dirty_gs_regs != ref.f.dirty_gs_regs) diff_field = "dirty_gs_regs";
+	else if (live.f.backed_up_ctx != ref.f.backed_up_ctx) diff_field = "backed_up_ctx";
+	else if (live.f.texflush_flag != ref.f.texflush_flag) diff_field = "texflush_flag";
+
+	if (diff_field)
+	{
+		m_kv.mm_fields++;
+		Console.WriteLn("GSKVDIFF: point=%s k=%u mismatch in scalar field '%s'", point, k, diff_field);
+		std::abort();
+	}
+
+	if (std::memcmp(&live.prev_env, &ref.prev_env, sizeof(GSDrawingEnvironment)) != 0)
+	{
+		m_kv.mm_prev_env++;
+		Console.WriteLn("GSKVDIFF: point=%s k=%u mismatch in m_prev_env", point, k);
+		std::abort();
+	}
+
+	const u32 num_indices = live.f.idx_tail;
+	for (u32 i = 0; i < num_indices; ++i)
+	{
+		if (i >= live.idx.size() || i >= ref.idx.size() || live.idx[i] != ref.idx[i])
+		{
+			m_kv.mm_idx++;
+			Console.WriteLn("GSKVDIFF: point=%s k=%u mismatch in emitted index at %u: live=%u ref=%u",
+				point, k, i,
+				(i < live.idx.size()) ? static_cast<u32>(live.idx[i]) : 0xFFFFu,
+				(i < ref.idx.size()) ? static_cast<u32>(ref.idx[i]) : 0xFFFFu);
+			std::abort();
+		}
+	}
+
+	const u32 max_vtx = std::max({live.vtx_end, ref.vtx_end, live.f.tail, ref.f.tail});
+	std::vector<bool> referenced(max_vtx + 1, false);
+	for (u32 v = 0; v < live.f.tail; ++v)
+	{
+		if (v < referenced.size())
+			referenced[v] = true;
+	}
+	for (u32 i = 0; i < num_indices; ++i)
+	{
+		const u32 idx = live.idx[i];
+		if (idx < referenced.size())
+			referenced[idx] = true;
+	}
+	for (u32 v = live.f.head; v < live.f.tail; ++v)
+	{
+		if (v < referenced.size())
+			referenced[v] = true;
+	}
+
+	for (u32 v = 0; v < referenced.size(); ++v)
+	{
+		if (!referenced[v])
+			continue;
+
+		if (v >= live.vtx.size() || v >= ref.vtx.size() ||
+			std::memcmp(&live.vtx[v], &ref.vtx[v], sizeof(GSVertex)) != 0)
+		{
+			m_kv.mm_vtx++;
+			Console.WriteLn("GSKVDIFF: point=%s k=%u mismatch in vertex slot %u", point, k, v);
+			std::abort();
+		}
+	}
+
+	return true;
+}
+
+void GSState::KickVerifyOnFlushEnter(u32 reason)
+{
+	if (!m_kv.recording)
+		return;
+
+	if (m_kv.pre.size() <= m_kv.pre_used)
+		m_kv.pre.emplace_back();
+
+	KickVerifyCapture(m_kv.pre[m_kv.pre_used], 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+	m_kv.pre[m_kv.pre_used].reason = reason;
+	m_kv.pre_used++;
+	m_kv.flushes++;
+}
+
+void GSState::KickVerifyOnFlushExit()
+{
+	if (!m_kv.recording)
+		return;
+
+	if (m_kv.post.size() <= m_kv.post_used)
+		m_kv.post.emplace_back();
+
+	KickVerifyCapture(m_kv.post[m_kv.post_used], 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+	m_kv.post_used++;
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyLiveLoop(const GIFPackedReg* RESTRICT r, u32 size)
+{
+#if GS_KICK_CHUNKED
+	// needs proper testing
+	if constexpr (prim == GS_TRIANGLESTRIP)
+	{
+		if (size >= 18 && !GSConfig.UserHacks_DrawBuffering)
+		{
+			KickTriangleStripChunkedSTQRGBAXYZF2<auto_flush>(r, size);
+#if GS_KICK_VERIFY_MUTATE
+			if (m_kv.recording)
+				m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
+#endif
+			return;
+		}
+#if GS_KICK_VERIFY
+		if (m_kv.recording)
+		{
+			const u32 n = size / 3;
+			m_kv.chunk_bail_verts += n;
+			if (size < 18)
+				m_kv.chunk_bail_small += n;
+			else if (GSConfig.UserHacks_DrawBuffering)
+				m_kv.chunk_bail_drawbuf += n;
+		}
+#endif
+	}
+#endif
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
+
+		m_v.m[0] = st.upl64(rgba.upl32(q));
+
+		GSVector4i xy = GSVector4i::loadl(&r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf);
+
+		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+
+		r += 3;
+	}
+
+	m_q = r[-3].STQ.Q;
+
+#if GS_KICK_VERIFY_MUTATE
+	if (m_kv.recording)
+		m_vertex->xy[0] = m_vertex->xy[0].add32(GSVector4i(1, 0, 0, 0));
+#endif
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyReferenceLoop(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	const GIFPackedReg* RESTRICT r_end = r + size;
+
+	while (r < r_end)
+	{
+		const GSVector4i st = GSVector4i::loadl(&r[0].U64[0]);
+		GSVector4i q = GSVector4i::loadl(&r[0].U64[1]);
+		const GSVector4i rgba = (GSVector4i::load<false>(&r[1]) & GSVector4i::x000000ff()).ps32().pu16();
+
+		q = q.blend8(GSVector4i::cast(GSVector4(FLT_MIN)), q == GSVector4i::zero());
+
+		m_v.m[0] = st.upl64(rgba.upl32(q));
+
+		GSVector4i xy = GSVector4i::loadl(&r[2].U64[0]);
+		GSVector4i zf = GSVector4i::loadl(&r[2].U64[1]);
+		xy = xy.upl16(xy.srl<4>()).upl32(GSVector4i::load((int)m_v.UV));
+		zf = zf.srl32<4>() & GSVector4i::x00ffffff().upl32(GSVector4i::x000000ff());
+
+		m_v.m[1] = xy.upl32(zf);
+
+		VertexKick<prim, auto_flush>(r[2].XYZF2.Skip());
+		if (m_kv.replay_abort)
+			break;
+
+		r += 3;
+	}
+
+	if (!m_kv.replay_abort)
+		m_q = r[-3].STQ.Q;
+}
+
+template <u32 prim, bool auto_flush>
+void GSState::KickVerifyRun(const GIFPackedReg* RESTRICT r, u32 size)
+{
+	m_kv.runs++;
+	if (m_kv.recording || m_kv.replaying)
+	{
+		m_kv.nested++;
+		KickVerifyLiveLoop<prim, auto_flush>(r, size);
+		return;
+	}
+	if (GSConfig.UserHacks_DrawBuffering)
+	{
+		m_kv.drawbuf_skipped++;
+		KickVerifyLiveLoop<prim, auto_flush>(r, size);
+		return;
+	}
+
+	const u64 pkt_before = KickVerifyHash(r, size);
+	const u32 n = size / 3;
+	m_kv.run_n = n;
+	m_kv.run_prim = prim;
+	m_kv.run_mismatch = false;
+	m_kv.pre_used = 0;
+	m_kv.post_used = 0;
+
+	KickVerifyCapture(m_kv.s0, 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+
+	m_kv.recording = true;
+	KickVerifyLiveLoop<prim, auto_flush>(r, size);
+	m_kv.recording = false;
+
+	if (m_max_vertex_count != m_kv.s0.max_vertex_count)
+	{
+		m_kv.grow_runs++;
+		m_kv.kicks_unverified += n;
+		return;
+	}
+
+	const bool flushed = (m_kv.pre_used != 0);
+	if (!flushed)
+		KickVerifyCapture(m_kv.end, 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+	else
+		KickVerifyCapture(m_kv.end, 0, m_kv.post[m_kv.post_used - 1].vtx_end, 0, m_kv.post[m_kv.post_used - 1].idx_end);
+
+	if (flushed)
+	{
+		m_kv.flush_runs++;
+		KickVerifyRestore(m_kv.pre[0]);
+	}
+	KickVerifyRestore(m_kv.s0);
+
+	m_kv.replaying = true;
+	m_kv.replay_abort = false;
+	m_kv.replay_flush = 0;
+	KickVerifyReferenceLoop<prim, auto_flush>(r, size);
+	m_kv.replaying = false;
+
+	const u64 pkt_after = KickVerifyHash(r, size);
+	if (pkt_before != pkt_after)
+	{
+		m_kv.mm_packet++;
+		Console.WriteLn("GSKVDIFF: packet modified during execution");
+		std::abort();
+	}
+
+	if (m_max_vertex_count != m_kv.s0.max_vertex_count)
+	{
+		m_kv.mm_grow++;
+		Console.WriteLn("GSKVDIFF: point=end mismatch in buffer growth");
+		std::abort();
+	}
+	else if (m_kv.replay_abort || m_kv.replay_flush != m_kv.pre_used)
+	{
+		Console.WriteLn("GSKVDIFF: replay flush count mismatch: live=%u ref=%u", m_kv.pre_used, m_kv.replay_flush);
+		std::abort();
+	}
+	else
+	{
+		KickVerifyCapture(m_kv.ref, 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+		KickVerifyCompare(m_kv.end, m_kv.ref, "end", 0);
+	}
+
+	KickVerifyRestore(m_kv.end);
+	m_kv.kicks += n;
+	m_kv.verified++;
+}
+#endif
 
 template <u32 prim, bool auto_flush>
 void GSState::GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size)
@@ -2554,12 +3199,36 @@ void GSState::GIFRegHandlerHWREG(const GIFReg* RESTRICT r)
 
 void GSState::Flush(GSFlushReason reason)
 {
+#if GS_KICK_VERIFY
+	if (m_kv.replaying)
+	{
+		const u32 k = m_kv.replay_flush++;
+		if (k >= m_kv.pre_used)
+		{
+			Console.WriteLn("GSKVDIFF: unexpected flush in replay at k=%u", k);
+			std::abort();
+		}
+		if (static_cast<u32>(reason) != m_kv.pre[k].reason)
+		{
+			Console.WriteLn("GSKVDIFF: flush reason mismatch: live=%u ref=%u", m_kv.pre[k].reason, static_cast<u32>(reason));
+			std::abort();
+		}
+		KickVerifyCapture(m_kv.ref, 0, m_max_vertex_count + 3, 0, (m_max_vertex_count + 3) * 6);
+		KickVerifyCompare(m_kv.pre[k], m_kv.ref, "flush", k);
+		KickVerifyRestore(m_kv.post[k]);
+		return;
+	}
+	KickVerifyOnFlushEnter(static_cast<u32>(reason));
+#endif
 	SetDrawBuffDirty();
 
 	FlushWrite();
 
 	FlushBuffers(false, true, reason);
 	ResetDrawBufferIdx();
+#if GS_KICK_VERIFY
+	KickVerifyOnFlushExit();
+#endif
 }
 
 void GSState::FlushDraw(GSFlushReason reason)

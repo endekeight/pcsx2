@@ -30,7 +30,7 @@
 #include <thread>
 #include <mutex>
 
-#if GS_PARSE_STATS
+#if GS_PARSE_STATS || GS_KICK_VERIFY
 #include "common/Console.h"
 #include <chrono>
 #endif
@@ -632,6 +632,43 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 #if GS_TC_FAST_LOOKUP_VERIFY
 	if (g_texture_cache)
 		g_texture_cache->PrintFastLookupVerifyIfDue();
+#endif
+#if GS_KICK_VERIFY
+	const auto kv_now = std::chrono::steady_clock::now();
+	if (m_kv.last == std::chrono::steady_clock::time_point{})
+	{
+		m_kv.last = kv_now;
+	}
+	else if (kv_now - m_kv.last >= std::chrono::seconds(1))
+	{
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(kv_now - m_kv.last).count();
+		Console.WriteLn("GSKV: ms=%lld runs=%llu verified=%llu kicks=%llu flush_runs=%llu flushes=%llu drawbuf_skipped=%llu nested=%llu mismatch_runs=%llu mm_fields=%llu mm_prev_env=%llu mm_vtx=%llu mm_idx=%llu mm_flush_count=%llu mm_flush_reason=%llu grow_runs=%llu kicks_unverified=%llu mm_grow=%llu mm_packet=%llu chunk_calls=%llu chunk_verts=%llu chunk_unconverted=%llu chunk_bail_verts=%llu chunk_bail_autoflush=%llu",
+			static_cast<long long>(ms),
+			static_cast<unsigned long long>(m_kv.runs),
+			static_cast<unsigned long long>(m_kv.verified),
+			static_cast<unsigned long long>(m_kv.kicks),
+			static_cast<unsigned long long>(m_kv.flush_runs),
+			static_cast<unsigned long long>(m_kv.flushes),
+			static_cast<unsigned long long>(m_kv.drawbuf_skipped),
+			static_cast<unsigned long long>(m_kv.nested),
+			static_cast<unsigned long long>(m_kv.mismatch_runs),
+			static_cast<unsigned long long>(m_kv.mm_fields),
+			static_cast<unsigned long long>(m_kv.mm_prev_env),
+			static_cast<unsigned long long>(m_kv.mm_vtx),
+			static_cast<unsigned long long>(m_kv.mm_idx),
+			static_cast<unsigned long long>(m_kv.mm_flush_count),
+			static_cast<unsigned long long>(m_kv.mm_flush_reason),
+			static_cast<unsigned long long>(m_kv.grow_runs),
+			static_cast<unsigned long long>(m_kv.kicks_unverified),
+			static_cast<unsigned long long>(m_kv.mm_grow),
+			static_cast<unsigned long long>(m_kv.mm_packet),
+			static_cast<unsigned long long>(m_kv.chunk_calls),
+			static_cast<unsigned long long>(m_kv.chunk_verts),
+			static_cast<unsigned long long>(m_kv.chunk_unconverted),
+			static_cast<unsigned long long>(m_kv.chunk_bail_verts),
+			static_cast<unsigned long long>(m_kv.chunk_bail_autoflush));
+		m_kv.last = kv_now;
+	}
 #endif
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
 	{
