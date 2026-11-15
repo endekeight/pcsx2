@@ -1800,6 +1800,32 @@ TEST(GSKickChunkedTests, AutoFlushPredicateMipmapLayers)
 	ctx.TEX1.LCM = 0;
 	ctx.TEX1.MXL = 7;
 	EXPECT_FALSE(GSChunkedKick::CanChunkTriangleStripUnderAutoFlush(
-		prim, ctx, GSHWAutoFlushLevel::Enabled));
+			prim, ctx, GSHWAutoFlushLevel::Enabled));
 }
+
+TEST(GSKickChunkedTests, VertexCountLimitExactlyAtChunkEnd)
+{
+	constexpr u32 max_prim = 65532;
+	constexpr u32 tail = max_prim - GSChunkedKick::kMaxChunkVertices;
+	constexpr u32 remaining = 200;
+	const u32 chunk = GSChunkedKick::TriangleStripChunkCountToVertexLimit(remaining, tail, max_prim);
+	EXPECT_EQ(chunk, GSChunkedKick::kMaxChunkVertices);
+	EXPECT_EQ(tail + chunk, max_prim);
+	EXPECT_TRUE(GSChunkedKick::TriangleStripNeedsVertexCountFlush(tail + chunk, max_prim, true));
+	EXPECT_FALSE(GSChunkedKick::TriangleStripNeedsVertexCountFlush(tail + chunk, max_prim, false));
+}
+
+TEST(GSKickChunkedTests, VertexCountLimitInsideChunk)
+{
+	constexpr u32 max_prim = 65532;
+	constexpr u32 tail = max_prim - 50;
+	constexpr u32 remaining = 200;
+	const u32 chunk = GSChunkedKick::TriangleStripChunkCountToVertexLimit(remaining, tail, max_prim);
+	EXPECT_EQ(chunk, 50u);
+	EXPECT_EQ(tail + chunk, max_prim);
+	EXPECT_LT(chunk, GSChunkedKick::kMaxChunkVertices);
+	EXPECT_TRUE(GSChunkedKick::TriangleStripNeedsVertexCountFlush(tail + chunk, max_prim, true));
+	EXPECT_FALSE(GSChunkedKick::TriangleStripNeedsVertexCountFlush(tail + chunk, max_prim, false));
+}
+
 

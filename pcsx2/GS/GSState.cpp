@@ -1641,12 +1641,12 @@ void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT 
 
 	while (remaining > 0)
 	{
-		const u32 vtx_limit = std::min<u32>(m_max_vertex_count, max_prim_vertices);
-		const u32 vtx_room = (m_vertex->tail < vtx_limit) ? (vtx_limit - m_vertex->tail) : 0;
+		const u32 prim_capped = GSChunkedKick::TriangleStripChunkCountToVertexLimit(
+			remaining, m_vertex->tail, max_prim_vertices);
+		const u32 buf_room = (m_vertex->tail < m_max_vertex_count) ? (m_max_vertex_count - m_vertex->tail) : 0;
 		const u32 idx_cap = (m_max_vertex_count + 3) * 6;
 		const u32 idx_room_verts = (m_index->tail < idx_cap) ? ((idx_cap - m_index->tail) / 3) : 0;
-		const u32 safe_room = std::min<u32>(vtx_room, idx_room_verts);
-		const u32 chunk_count = std::min<u32>({remaining, GSChunkedKick::kMaxChunkVertices, safe_room});
+		const u32 chunk_count = std::min<u32>({prim_capped, buf_room, idx_room_verts});
 
 		if (remaining < 6 || chunk_count < 6)
 		{
@@ -1786,6 +1786,16 @@ void GSState::KickTriangleStripChunkedSTQRGBAXYZF2(const GIFPackedReg* RESTRICT 
 
 		cur_r += 3 * chunk_count;
 		remaining -= chunk_count;
+
+		// VertexKick flushes as soon as tail reaches MaxVerticesForPrim after an
+		// accepted vertex. The room cap above keeps this chunk from writing past
+		// that limit; Flush here so the draw splits on the same vertex.
+		if (GSChunkedKick::TriangleStripNeedsVertexCountFlush(
+				m_vertex->tail, max_prim_vertices, decided.IsAccepted(chunk_count - 1)))
+		{
+			flush_deferred_trailing();
+			Flush(VERTEXCOUNT);
+		}
 	}
 
 	flush_deferred_trailing();

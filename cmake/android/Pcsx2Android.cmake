@@ -465,6 +465,7 @@ set(pcsx2GSHeaders
 	GS/GSPng.h
 	GS/GSRingHeap.h
 	GS/GSState.h
+	GS/GSVertexKickChunked.h
 	GS/GSTables.h
 	GS/GSUtil.h
 	GS/GSVector.h

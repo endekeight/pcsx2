@@ -19,6 +19,21 @@ namespace GSChunkedKick
 
 static constexpr u32 kMaxChunkVertices = 128;
 
+// How many triangle-strip vertices a chunk may consume without letting tail pass
+// max_prim_vertices. `tail` is the next-free slot, matching VertexKick's
+// `if (vtx_buff.tail >= max_vertices) Flush(VERTEXCOUNT)`.
+inline constexpr u32 TriangleStripChunkCountToVertexLimit(u32 remaining, u32 tail, u32 max_prim_vertices)
+{
+	const u32 room = (tail < max_prim_vertices) ? (max_prim_vertices - tail) : 0;
+	return std::min<u32>({remaining, kMaxChunkVertices, room});
+}
+
+// VertexKick only reaches the VERTEXCOUNT check after an accepted vertex.
+inline constexpr bool TriangleStripNeedsVertexCountFlush(u32 tail_after, u32 max_prim_vertices, bool last_vertex_accepted)
+{
+	return last_vertex_accepted && tail_after >= max_prim_vertices;
+}
+
 struct DecidedChunk
 {
 	u64 accept[2] = {0, 0};
