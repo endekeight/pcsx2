@@ -25,9 +25,9 @@
 // so every translation unit must see the same value.
 #define GS_GIF_LAYOUT_STATS 0
 
-// Chunked vertex kick: processes contiguous packed vertex packets in chunked passes. Ships 0.
+// Chunked vertex kick: processes contiguous packed vertex packets in chunked passes. Ships 1.
 #ifndef GS_KICK_CHUNKED
-#define GS_KICK_CHUNKED 0
+#define GS_KICK_CHUNKED 1
 #endif
 
 // Differential verification: compares vertex-kick results against the legacy per-vertex path. Ships 0.
