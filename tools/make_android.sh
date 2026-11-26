@@ -37,73 +37,16 @@ NDK=28.0.12674087
 ANDROID_SDK=33
 SDL_VERSION=3.2.10
 
-if [ -f "$DEPS/lib/cmake/ryml/rymlConfig.cmake" ]; then
-    echo "The $DEPS folder contains the required dependencies. Skip building dependencies."
-else
-    echo "The $DEPS folder is missing required dependencies. Start building dependencies."
-    .github/workflows/scripts/linux/build-dependencies-android.sh $DEPS
-fi
-
-if [ -d "$BUILD_DIR" ]; then
-  	echo "$BUILD_DIR does exist. Clean it up"
-	rm -rf $BUILD_DIR/*
-else
-	mkdir -p $BUILD_DIR
-fi
-
-if [ -d "$LIBS_ROOT" ]; then
-  	echo "$LIBS_ROOT does exist. Clean it up"
-	rm -rf $LIBS_ROOT/*
-else
-	mkdir -p $LIBS_ROOT
-fi
-
-# The header tree is regenerated wholesale, so a stale header from a previous revision
-# cannot survive into the new one.
-if [ -d "$YAAPSECORE_LIBS" ]; then
-	echo "$YAAPSECORE_LIBS does exist. Clean it up"
-	rm -rf $YAAPSECORE_LIBS/*
-else
-	mkdir -p $YAAPSECORE_LIBS
-fi
-mkdir -p $LIBS_INCLUDE
-
-if [ "$OS" = "Linux" ]; then
-    echo "Building on Linux"
-    ANDROID_SDK_PATH=~/Android/Sdk
-elif [ "$OS" = "Darwin" ]; then
-    echo "Building on macOS"
-    ANDROID_SDK_PATH=~/Library/Android/sdk
-else
-    echo "Unsupported platform"
-    exit 1
-fi
-
-NDK_TOOLCHAIN_PATH=$ANDROID_SDK_PATH/ndk/$NDK/build/cmake/android.toolchain.cmake
-
-# Diagnostic only (A20): YAAPSE_ASAN=1 builds the archives with upstream's USE_ASAN
-# switch and a shared C++ runtime, as the NDK's ASan guide requires, and leaves a
-# USE_ASAN marker beside them. The frontend refuses to link an ASan archive set
-# without its own ASan build, or the reverse: a one-sided sanitizer build links and
-# corrupts memory silently. Unset, nothing below changes.
-ASAN_ARGS=()
-if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
-	echo "YAAPSE_ASAN=1: building with -DUSE_ASAN=ON"
-	# Precompiled headers are off: with -fsanitize=address, NDK 28's clang
-	# rejects the PCH's va_list against libc++'s ("non-const lvalue reference
-	# to type '__builtin_va_list' cannot bind to a value of unrelated type
-	# 'va_list'"); the same file compiles without the PCH.
-	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON)
-fi
-
 # C128: shipping build options (assertions out, LTO, PGO). The shipping build is
 # upstream's release build since C128 (arm B3: assertions out + LTO + profile use).
 # Defaults: YAAPSE_ASSERTS_OFF=1, YAAPSE_LTO=1, YAAPSE_PGO=use.
 # YAAPSE_ASSERTS_OFF=0, YAAPSE_LTO=0 and YAAPSE_PGO=off turn each part off;
 # YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off gives the pre-C128 build.
-# The profile lives outside git at .bridge/pgo/yaapse.profdata, recorded by
-# tools/pgo_profile.sh, regenerated before a release build and whenever a merged
-# task changes GS or yaapsecore sources.
+# The profile lives outside git in the main checkout's .bridge/pgo/yaapse.profdata,
+# found from any worktree through the git common directory; its sha256 is pinned
+# in the workspace's tools/pgo/PROFILE.sha256; a missing or unpinned profile stops
+# the build; refresh procedure in docs/TESTING.md.
+# YAAPSE_PGO_RESOLVE_ONLY=1: test hook to validate/resolve options and exit 0.
 # With YAAPSE_ASAN=1, LTO and PGO default to off instead.
 YAAPSE_ASSERTS_OFF="${YAAPSE_ASSERTS_OFF:-1}"
 if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
@@ -165,22 +108,111 @@ elif [ "$YAAPSE_PGO" = "use" ]; then
 				PGO_PROFILE_ABS="$(pwd)/$YAAPSE_PGO_PROFILE"
 			fi
 		fi
+
+		if [ ! -f "$PGO_PROFILE_ABS" ]; then
+			echo "make_android.sh: error: profile missing at '$PGO_PROFILE_ABS'; record one with tools/pgo_profile.sh or, for the development build, run with YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off (docs/TESTING.md)" >&2
+			exit 1
+		fi
+
+		ACTUAL_HASH="$(shasum -a 256 "$PGO_PROFILE_ABS" | awk '{print $1}')"
+		echo "make_android.sh: explicit YAAPSE_PGO_PROFILE, not checked against tools/pgo/PROFILE.sha256: $PGO_PROFILE_ABS sha256 $ACTUAL_HASH"
 	else
-		PGO_PROFILE_ABS="$(cd "$DIR/.." && pwd)/.bridge/pgo/yaapse.profdata"
+		WS_ROOT="$(cd "$DIR/.." && pwd)"
+		GIT_COMMON_DIR="$(git -C "$WS_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+		if [ -n "$GIT_COMMON_DIR" ]; then
+			MAIN_CHECKOUT="$(dirname "$GIT_COMMON_DIR")"
+			PGO_PROFILE_ABS="$MAIN_CHECKOUT/.bridge/pgo/yaapse.profdata"
+		else
+			PGO_PROFILE_ABS="<unknown: git common dir not found from $WS_ROOT>"
+		fi
+
+		if [ ! -f "$PGO_PROFILE_ABS" ]; then
+			echo "make_android.sh: error: profile missing at '$PGO_PROFILE_ABS'; record one with tools/pgo_profile.sh or, for the development build, run with YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off (docs/TESTING.md)" >&2
+			exit 1
+		fi
+
+		PIN_FILE="$WS_ROOT/tools/pgo/PROFILE.sha256"
+		if [ ! -f "$PIN_FILE" ]; then
+			echo "make_android.sh: error: pin file missing at '$PIN_FILE'" >&2
+			exit 1
+		fi
+
+		PIN_HASH="$(head -n 1 "$PIN_FILE" | awk '{print $1}')"
+		ACTUAL_HASH="$(shasum -a 256 "$PGO_PROFILE_ABS" | awk '{print $1}')"
+		if [ "$ACTUAL_HASH" != "$PIN_HASH" ]; then
+			echo "make_android.sh: error: profile hash mismatch: profile $PGO_PROFILE_ABS sha256 is $ACTUAL_HASH, but pin $PIN_FILE specifies $PIN_HASH" >&2
+			exit 1
+		fi
 	fi
 
-	if [ ! -f "$PGO_PROFILE_ABS" ]; then
-		echo "make_android.sh: no profile at $PGO_PROFILE_ABS; building without a profile (link-time optimisation and release definitions still apply). Record one with tools/pgo_profile.sh"
-		PGO_MODE="off"
-		PGO_FLAGS=""
-		PGO_PROFILE_PATH=""
-		PGO_PROFILE_ID=""
-	else
-		PGO_MODE="use"
-		PGO_FLAGS="-fprofile-use=$PGO_PROFILE_ABS -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date -Wno-backend-plugin"
-		PGO_PROFILE_PATH="$PGO_PROFILE_ABS"
-		PGO_PROFILE_ID="$(shasum -a 256 "$PGO_PROFILE_ABS" | cut -c1-16)"
-	fi
+	PGO_MODE="use"
+	PGO_FLAGS="-fprofile-use=$PGO_PROFILE_ABS -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date -Wno-backend-plugin"
+	PGO_PROFILE_PATH="$PGO_PROFILE_ABS"
+	PGO_PROFILE_ID="${ACTUAL_HASH:0:16}"
+fi
+
+if [ "${YAAPSE_PGO_RESOLVE_ONLY:-0}" = "1" ]; then
+	echo "make_android.sh: build options asserts_off=$ASSERTS_OFF_CMAKE lto=$LTO_CMAKE pgo=$PGO_MODE profile=${PGO_PROFILE_PATH:-none} id=${PGO_PROFILE_ID:-none}"
+	exit 0
+fi
+
+if [ -f "$DEPS/lib/cmake/ryml/rymlConfig.cmake" ]; then
+    echo "The $DEPS folder contains the required dependencies. Skip building dependencies."
+else
+    echo "The $DEPS folder is missing required dependencies. Start building dependencies."
+    .github/workflows/scripts/linux/build-dependencies-android.sh $DEPS
+fi
+
+if [ -d "$BUILD_DIR" ]; then
+  	echo "$BUILD_DIR does exist. Clean it up"
+	rm -rf $BUILD_DIR/*
+else
+	mkdir -p $BUILD_DIR
+fi
+
+if [ -d "$LIBS_ROOT" ]; then
+  	echo "$LIBS_ROOT does exist. Clean it up"
+	rm -rf $LIBS_ROOT/*
+else
+	mkdir -p $LIBS_ROOT
+fi
+
+# The header tree is regenerated wholesale, so a stale header from a previous revision
+# cannot survive into the new one.
+if [ -d "$YAAPSECORE_LIBS" ]; then
+	echo "$YAAPSECORE_LIBS does exist. Clean it up"
+	rm -rf $YAAPSECORE_LIBS/*
+else
+	mkdir -p $YAAPSECORE_LIBS
+fi
+mkdir -p $LIBS_INCLUDE
+
+if [ "$OS" = "Linux" ]; then
+    echo "Building on Linux"
+    ANDROID_SDK_PATH=~/Android/Sdk
+elif [ "$OS" = "Darwin" ]; then
+    echo "Building on macOS"
+    ANDROID_SDK_PATH=~/Library/Android/sdk
+else
+    echo "Unsupported platform"
+    exit 1
+fi
+
+NDK_TOOLCHAIN_PATH=$ANDROID_SDK_PATH/ndk/$NDK/build/cmake/android.toolchain.cmake
+
+# Diagnostic only (A20): YAAPSE_ASAN=1 builds the archives with upstream's USE_ASAN
+# switch and a shared C++ runtime, as the NDK's ASan guide requires, and leaves a
+# USE_ASAN marker beside them. The frontend refuses to link an ASan archive set
+# without its own ASan build, or the reverse: a one-sided sanitizer build links and
+# corrupts memory silently. Unset, nothing below changes.
+ASAN_ARGS=()
+if [ "${YAAPSE_ASAN:-0}" = "1" ]; then
+	echo "YAAPSE_ASAN=1: building with -DUSE_ASAN=ON"
+	# Precompiled headers are off: with -fsanitize=address, NDK 28's clang
+	# rejects the PCH's va_list against libc++'s ("non-const lvalue reference
+	# to type '__builtin_va_list' cannot bind to a value of unrelated type
+	# 'va_list'"); the same file compiles without the PCH.
+	ASAN_ARGS=(-DUSE_ASAN=ON -DANDROID_STL=c++_shared -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON)
 fi
 
 mkdir -p $LIBS_DIR
