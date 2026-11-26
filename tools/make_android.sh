@@ -119,12 +119,12 @@ elif [ "$YAAPSE_PGO" = "use" ]; then
 	else
 		WS_ROOT="$(cd "$DIR/.." && pwd)"
 		GIT_COMMON_DIR="$(git -C "$WS_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-		if [ -n "$GIT_COMMON_DIR" ]; then
-			MAIN_CHECKOUT="$(dirname "$GIT_COMMON_DIR")"
-			PGO_PROFILE_ABS="$MAIN_CHECKOUT/.bridge/pgo/yaapse.profdata"
-		else
-			PGO_PROFILE_ABS="<unknown: git common dir not found from $WS_ROOT>"
+		if [ -z "$GIT_COMMON_DIR" ]; then
+			echo "make_android.sh: error: profile missing: git common dir not found from $WS_ROOT; record one with tools/pgo_profile.sh or, for the development build, run with YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off (docs/TESTING.md)" >&2
+			exit 1
 		fi
+		MAIN_CHECKOUT="$(dirname "$GIT_COMMON_DIR")"
+		PGO_PROFILE_ABS="$MAIN_CHECKOUT/.bridge/pgo/yaapse.profdata"
 
 		if [ ! -f "$PGO_PROFILE_ABS" ]; then
 			echo "make_android.sh: error: profile missing at '$PGO_PROFILE_ABS'; record one with tools/pgo_profile.sh or, for the development build, run with YAAPSE_ASSERTS_OFF=0 YAAPSE_LTO=0 YAAPSE_PGO=off (docs/TESTING.md)" >&2
@@ -138,6 +138,10 @@ elif [ "$YAAPSE_PGO" = "use" ]; then
 		fi
 
 		PIN_HASH="$(head -n 1 "$PIN_FILE" | awk '{print $1}')"
+		if [[ ! "$PIN_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+			echo "make_android.sh: error: malformed pin in $PIN_FILE (line 1 must be '<sha256>  yaapse.profdata')" >&2
+			exit 1
+		fi
 		ACTUAL_HASH="$(shasum -a 256 "$PGO_PROFILE_ABS" | awk '{print $1}')"
 		if [ "$ACTUAL_HASH" != "$PIN_HASH" ]; then
 			echo "make_android.sh: error: profile hash mismatch: profile $PGO_PROFILE_ABS sha256 is $ACTUAL_HASH, but pin $PIN_FILE specifies $PIN_HASH" >&2
